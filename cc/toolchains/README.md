@@ -3,7 +3,7 @@
 Work in progress!
 
 This document serves two purposes:
-* Until complete, this serves as an agreement for the final user-facing API. 
+* Until complete, this serves as an agreement for the final user-facing API.
 * Once complete, this will serve as onboarding documentation.
 
 This section will be removed once complete.
@@ -29,7 +29,7 @@ sh_binary(
     srcs = ["ld_wrapper.sh"],
     data = [":bin/ld"],
 )
-    
+
 ```
 
 ## Step 2: Generate action configs from those tools
@@ -43,15 +43,15 @@ Each action can only be specified once in the toolchain. Specifying multiple
 actions in a single `cc_action_type_config` is just a shorthand for specifying the
 same config for every one of those actions.
 
-If you're already familiar with how to define toolchains, the additional files
-is a replacement for `compile_files`, `link_files`, etc.
+If you're already familiar with how to define toolchains, the `data` attribute
+is a replacement for the `compile_files`, `link_files`, etc. groups passed to
+`cc_toolchain`. These legacy `*_files` groups are derived from the `data`
+attributes specified directly on `cc_action_type_config` and transitively via
+`cc_action_type_config`'s `args`, `tools`, and `implies` attributes as well as
+via features that are later associated ...
 
-Additionally, to replace `all_files`, we add `cc_additional_files_for_actions`.
-This allows you to specify that particular files are required for particular
-actions.
-
-We provide `additional_files` on the `cc_action_type_config` as a shorthand for 
-specifying `cc_additional_files_for_actions`
+q: tools files
+q: features on `cc_action_type_config` files
 
 Warning: Implying a feature that is not listed directly in the toolchain will throw
 an error. This is to ensure you don't accidentally add a feature to the
@@ -64,7 +64,7 @@ cc_action_type_config(
     tools = ["@sysroot//:clang"],
     args = [":my_args"],
     implies = [":my_feature"],
-    additional_files = ["@sysroot//:all_header_files"],
+    data = ["@sysroot//:all_header_files"],
 )
 
 cc_additional_files_for_actions(
@@ -85,8 +85,12 @@ API, with the following caveats:
 * `env` may be used to add environment variables to the arguments. Environment
   variables set by later args take priority.
 * By default, all inputs are automatically added to the corresponding actions.
-  `additional_files` specifies files that are required for an action when using
+  `data` specifies files that are required for an action when using
   that argument.
+  <!-- wait what? how?
+
+  answer: by associating them with the action's tool?
+-->
 
 ```
 cc_args(
@@ -98,6 +102,8 @@ cc_args(
     additional_files = [":file"],
 )
 ```
+
+<!-- TODO: update -->
 
 For more complex use cases, we use the same API as `Args`. Values are either:
 * A list of files (or a single file for `cc_add_args`).
@@ -216,7 +222,7 @@ the builtin one. This is essentially just an acknowledgement of "I know what
 I'm doing".
 
 Warning: Specifying two features with the same name is an error, unless one
-overrides the other. 
+overrides the other.
 
 ```
 cc_feature(

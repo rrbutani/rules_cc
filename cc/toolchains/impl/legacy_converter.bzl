@@ -39,6 +39,8 @@ visibility([
 # nondeterministic (eg. depset's .to_list(), dictionary iteration).
 # This allows our tests to call equals() on the output,
 # and *may* provide better caching properties.
+#
+# TODO: note that ordering for, e.g., features and flag sets is not preserved?
 
 def _convert_actions(actions):
     return sorted([action.name for action in actions.to_list()])
@@ -141,7 +143,7 @@ def _convert_action_type_config(atc):
 
     return legacy_action_config(
         action_name = atc.action_type.name,
-        enabled = True,
+        enabled = True, # TODO: should this be `False`? See: https://github.com/bazelbuild/bazel/blob/cc335fd27e3f8b5a57f98328a67e874d28f4d558/src/main/protobuf/crosstool_config.proto#L312
         tools = [convert_tool(tool) for tool in atc.tools],
         implies = implies,
     )
@@ -172,11 +174,18 @@ def convert_toolchain(toolchain):
         # Action configs don't take in an env like they do a flag set.
         # In order to support them, we create a feature with the env that the action
         # config will enable, and imply it in the action config.
+        #  - TODO: this is true even though the docs imply otherwise...
+        #    + https://bazel.build/docs/cc-toolchain-config-reference#using-action-config
+        #    + https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1768-L1809
+        #  - we should update the docs?
+        #  - or add support?
+        #    + it *is* indeed present on `ActionConfig` in `crosstool_config.proto`!
+        #      * https://github.com/bazelbuild/bazel/blob/cc335fd27e3f8b5a57f98328a67e874d28f4d558/src/main/protobuf/crosstool_config.proto#L324-L326
         if atc.args:
-            features.append(convert_feature(FeatureInfo(
+            features.append(convert_feature(FeatureInfo( # TODO: ordering; this should probably go last?
                 name = "implied_by_%s" % atc.action_type.name,
                 enabled = False,
-                args = ArgsListInfo(args = atc.args),
+                args = ArgsListInfo(args = atc.args), # TODO: should be filtered down to just this action!
                 implies = depset([]),
                 requires_any_of = [],
                 mutually_exclusive = [],
@@ -185,6 +194,7 @@ def convert_toolchain(toolchain):
         action_configs.append(_convert_action_type_config(atc))
 
     return struct(
+        # TODO: sorting features is bad, actually! order of the features affects order of expanded arguments
         features = sorted([ft for ft in features if ft != None], key = lambda ft: ft.name),
         action_configs = sorted(action_configs, key = lambda ac: ac.action_name),
     )

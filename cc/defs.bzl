@@ -21,10 +21,10 @@ load("//cc/private/rules_impl:native.bzl", "NativeCcInfo", "NativeCcToolchainCon
 _MIGRATION_TAG = "__CC_RULES_MIGRATION_DO_NOT_USE_WILL_BREAK__"
 
 # TODO(bazel-team): To avoid breaking changes, if the below are no longer
-# forwarding to native rules, flag @bazel_tools@bazel_tools//tools/cpp:link_extra_libs
+# forwarding to native rules, flag @bazel_tools//tools/cpp:link_extra_libs
 # should either: (a) alias the flag @rules_cc//:link_extra_libs, or (b) be
 # added as a dependency to @rules_cc//:link_extra_lib. The intermediate library
-# @bazel_tools@bazel_tools//tools/cpp:link_extra_lib should either be added as a dependency
+# @bazel_tools//tools/cpp:link_extra_lib should either be added as a dependency
 # to @rules_cc//:link_extra_lib, or removed entirely (if possible).
 _LINK_EXTRA_LIB = "@rules_cc//:link_extra_lib"  # copybara-use-repo-external-label
 

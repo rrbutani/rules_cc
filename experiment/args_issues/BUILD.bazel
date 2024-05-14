@@ -1,0 +1,148 @@
+
+load("@rules_cc//cc/toolchains:action_type_config.bzl", "cc_action_type_config")
+load("@rules_cc//cc/toolchains:actions.bzl", "cc_action_type", "cc_action_type_set")
+load("@rules_cc//cc/toolchains:args_list.bzl", "cc_args_list")
+load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
+load("@rules_cc//cc/toolchains:feature_constraint.bzl", "cc_feature_constraint")
+load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
+load("@rules_cc//cc/toolchains:format.bzl", "format_arg")
+load("@rules_cc//cc/toolchains:mutually_exclusive_category.bzl", "cc_mutually_exclusive_category")
+# load("@rules_cc//cc/toolchains:nested_args.bzl", "cc_nested_args")
+load("@rules_cc//cc/toolchains:tool.bzl", "cc_tool")
+load("@rules_cc//cc/toolchains:toolchain.bzl", "cc_toolchain")
+load("//:defs.bzl", "print_cc_toolchain_config_info")
+
+################################################################################
+
+# Action Types:
+
+cc_action_type(name = "action1", action_name = "action1")
+cc_action_type(name = "action2", action_name = "action2")
+cc_action_type(name = "action3", action_name = "action3")
+
+cc_action_type_set(
+    name = "all_actions",
+    actions = [
+        ":action1",
+        ":action2",
+        ":action3",
+    ],
+)
+
+################################################################################
+
+# Args:
+
+cc_args(
+    name = "args_1",
+    actions = [
+        ":action1",
+        ":action2",
+        ":action3", # TODO: no warning that we're talking about a feature that's
+                    # not included in the referenced toolchain?
+                    #
+                    # actually... that's probably fine
+                    #
+                    # it shouldn't get included in the output though
+
+        # this is awkward but not an *issue*: the generated flag set will list
+        # all of these actions but the feature still has to be enabled which is
+        # only done by the action(s) this args object is associated with
+
+        # TODO:
+        # it's `data` that's a problem I think; this has no gating so it'll get
+        # incorrectly associated with all the actions above, even if this args
+        # object is only tacked onto *some* of the actions
+    ],
+    env = {},
+    requires_any_of = [],
+    args = ["--yo"],
+    data = [],
+)
+
+cc_args(
+    name = "args_2",
+    actions = [":all_actions"],
+    args = ["--uh-oh"],
+)
+
+################################################################################
+
+# Action Configs and Features:
+
+cc_action_type_config(
+    name = "action_config_1",
+    action_types = [
+        ":action1",
+    ],
+    tools = [":tool"],
+    args = [
+        ":args_1",
+    ],
+
+    # I think these features become *always* implied, not just for this action?
+    implies = [":no_legacy_features"], # uh-oh?
+    # nvm, it's fine
+
+    # these get routed into the corresponding groups...
+    data = [],
+)
+
+cc_action_type_config(
+    name = "action_config_2",
+    action_types = [
+        ":action2",
+    ],
+    tools = [":tool"],
+    args = [
+        ":args_1",
+    ],
+
+    data = [],
+)
+
+cc_tool(name = "tool", src = ":foo")
+
+#-------------------------------------------------------------------------------
+
+cc_feature(
+    name = "no_legacy_features",
+    feature_name = "no_legacy_features",
+    enabled = True,
+    args = [],
+)
+
+################################################################################
+
+# Toolchain:
+
+cc_toolchain(
+    name = "test_toolchain",
+    action_type_configs = [
+        ":action_config_1",
+        ":action_config_2",
+    ],
+    args = [
+        # TODO: these args are duplicated! (expanded on action1 and action2
+        # twice...)
+        #
+        # is this intended? should we document this?
+        #
+        # I actually don't feel strongly about this one way or another...
+        ":args_1",
+    ],
+    toolchain_features = [
+
+        ":no_legacy_features",
+    ],
+
+    target_system_name = "",
+    target_cpu = "",
+    target_libc = "",
+    compiler = "",
+)
+
+print_cc_toolchain_config_info( # _and_file_groups (TODO)
+    name = "test",
+    config = ":_test_toolchain_config",
+)

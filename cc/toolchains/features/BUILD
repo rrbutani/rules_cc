@@ -5,6 +5,8 @@ package(default_visibility = ["//visibility:public"])
 
 # See https://bazel.build/docs/cc-toolchain-config-reference#wellknown-features
 
+# TODO: it seems like toolchains actually *do* have to define these?
+
 cc_external_feature(
     name = "opt",
     feature_name = "opt",
@@ -35,11 +37,12 @@ cc_external_feature(
     overridable = True,
 )
 
-cc_external_feature(
-    name = "per_object_debug_info",
-    feature_name = "per_object_debug_info",
-    overridable = True,
-)
+# is actually a legacy feature (added if not user-specified)
+# cc_external_feature(
+#     name = "per_object_debug_info",
+#     feature_name = "per_object_debug_info",
+#     overridable = True,
+# )
 
 cc_external_feature(
     name = "supports_start_end_lib",
@@ -47,11 +50,12 @@ cc_external_feature(
     overridable = True,
 )
 
-cc_external_feature(
-    name = "supports_interface_shared_libraries",
-    feature_name = "supports_interface_shared_libraries",
-    overridable = True,
-)
+# is actually a legacy feature (added if not user-specified)
+# cc_external_feature(
+#     name = "supports_interface_shared_libraries",
+#     feature_name = "supports_interface_shared_libraries",
+#     overridable = True,
+# )
 
 cc_external_feature(
     name = "supports_dynamic_linker",
@@ -59,11 +63,12 @@ cc_external_feature(
     overridable = True,
 )
 
-cc_external_feature(
-    name = "static_link_cpp_runtimes",
-    feature_name = "static_link_cpp_runtimes",
-    overridable = True,
-)
+# is actually a legacy feature (added if not user-specified)
+# cc_external_feature(
+#     name = "static_link_cpp_runtimes",
+#     feature_name = "static_link_cpp_runtimes",
+#     overridable = True,
+# )
 
 cc_external_feature(
     name = "supports_pic",
@@ -79,11 +84,8 @@ cc_feature_set(
         ":fastbuild",
         ":static_linking_mode",
         ":dynamic_linking_mode",
-        ":per_object_debug_info",
         ":supports_start_end_lib",
-        ":supports_interface_shared_libraries",
         ":supports_dynamic_linker",
-        ":static_link_cpp_runtimes",
         ":supports_pic",
     ],
     visibility = ["//visibility:private"],

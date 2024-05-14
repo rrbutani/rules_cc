@@ -136,6 +136,9 @@ def _validate_toolchain(self, fail = fail):
         _validate_args(args, known_features, fail = fail)
 
 def _collect_files_for_action_type(atc, features, args):
+    # NOTE: because implied features must also be added to the top-level
+    # `cc_toolchain_config` target, we don't have to worry about hoisting up
+    # features from `atc.implies`.
     transitive_files = [atc.files.files, get_action_type(args, atc.action_type).files]
     for ft in features:
         transitive_files.append(get_action_type(ft.args, atc.action_type).files)
@@ -176,3 +179,6 @@ def toolchain_config_info(label, features = [], args = [], action_type_configs =
     )
     _validate_toolchain(toolchain_config, fail = fail)
     return toolchain_config
+
+# TODO: all features implied are present?
+# TODO:

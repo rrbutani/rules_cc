@@ -78,6 +78,10 @@ Mutually exclusive with args.""",
 
 For example, a flag that sets the header directory might add the headers in that
 directory as additional files.
+
+TODO: note that these files will be added even if the args are gated? (features not matched)
+
+TODO: location style interp? make referencing these allowed/checked?
 """,
     ),
     "variables": attr.label_list(
@@ -151,9 +155,19 @@ def nested_args_provider_from_ctx(ctx):
     args = []
     for arg in ctx.attr.args:
         arg = json.decode(arg)
+
+        # Rewrite `value` (if present) from an index to a Label:
         if "value" in arg:
             if arg["value"] != None:
                 arg["value"] = variables[arg["value"]]
+
+        # Do `$(location ...)` substitution on the format string:
+        # TODO: maybe do this after variables are interpolated so error messages
+        # stemming from variable issues are clearer?
+        arg["format"] = ctx.expand_location(
+            arg["format"],
+            targets = ctx.attr.data,
+        )
         args.append(struct(**arg))
 
     return nested_args_provider(

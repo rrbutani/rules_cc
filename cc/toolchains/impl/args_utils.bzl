@@ -34,6 +34,8 @@ def get_action_type(args_list, action_type):
         if args.action == action_type:
             return args
 
+    # NOTE: `args.args[*].actions` may still specify more than just
+    # `action_type`...
     return struct(action = action_type, args = tuple(), files = depset([]))
 
 def validate_nested_args(*, nested_args, variables, actions, label, fail = fail):

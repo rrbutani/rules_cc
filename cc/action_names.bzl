@@ -42,6 +42,9 @@ ASSEMBLE_ACTION_NAME = "assemble"
 # Name of the assembly preprocessing action.
 PREPROCESS_ASSEMBLE_ACTION_NAME = "preprocess-assemble"
 
+# Name of the placeholder action for `llvm-cov`. Not actually used (?).
+LLVM_COV = "llvm-cov" # !!!
+
 # Name of the action producing ThinLto index.
 LTO_INDEXING_ACTION_NAME = "lto-indexing"
 
@@ -98,6 +101,52 @@ ACTION_NAMES = struct(
     cpp_module_compile = CPP_MODULE_COMPILE_ACTION_NAME,
     assemble = ASSEMBLE_ACTION_NAME,
     preprocess_assemble = PREPROCESS_ASSEMBLE_ACTION_NAME,
+
+    # TODO: llvm_cov action?
+    #  - yes: https://github.com/bazelbuild/bazel/blob/9c91b9599eb3ecb1ccf21d04004191a5a3b273d7/src/main/starlark/builtins_bzl/common/cc/action_names.bzl#L47
+    #  - no: https://github.com/bazelbuild/bazel/blob/6d0c21081b92da498f4b7eff9e5c921f32a37c09/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionNames.java#L81-L82
+    #
+    # doesn't appear to be used anywhere though...
+    #
+    # can still make the action just so we have something to associate the tool
+    # to? (TODO)
+    llvm_cov = LLVM_COV,
+
+
+    # tool paths with no corresponding action_config tools (i.e. must be
+    # specified in `tool_paths`):
+    #
+    # TODO: gcov?
+    #  - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L1092
+    #
+    # TODO: gcov-tool?
+    #  - only used in makevars afaik...
+    #  - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L673-L674
+    #
+    # TODO: llvm_profdata?
+    #  - only in tool paths, can't provide w/tools on `action_config(...)`
+    #  - https://github.com/bazelbuild/bazel/blob/531a7c7eb65245974068bd7f15ab7fe2b900fb05/src/main/java/com/google/devtools/build/lib/rules/cpp/FdoHelper.java#L458-L462
+    #  - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L1094
+    #
+    # TODO: dwp?
+    #  - only in tool paths: https://github.com/bazelbuild/bazel/blob/ce9fa8eff5d4705c9f6bf6f6642fa9ed45eb0247/src/main/starlark/builtins_bzl/common/cc/cc_binary.bzl#L50
+    #
+    # TODO: llvm-cov?
+    #  - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L1096
+    #
+    # TODO: objdump?
+    #  - used... literally no where?
+    #
+    # TODO: objcopy?
+    #  - used by the objcopy_embed_data action (goog internal); going to assume that that action
+    #    checks its action config before falling back to `tool_paths`
+    #  - used by path in make vars: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L670-L673
+    #
+    # tool list:
+    # https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L82-L93
+    # https://github.com/bazelbuild/bazel/blob/7fa7cd605ab5acd9db6cb0c19c4b6c9703c2eb7a/src/main/java/com/google/devtools/build/lib/rules/cpp/CppConfiguration.java#L67-L79
+    # ar, ld, llvm-cov, llvm-profdata, cpp, gcc, dwp, gcov, nm, objcopy, objdump, strip
+
     lto_indexing = LTO_INDEXING_ACTION_NAME,
     lto_backend = LTO_BACKEND_ACTION_NAME,
     lto_index_for_executable = LTO_INDEX_FOR_EXECUTABLE_ACTION_NAME,
@@ -113,6 +162,7 @@ ACTION_NAMES = struct(
     objc_fully_link = OBJC_FULLY_LINK_ACTION_NAME,
     objcpp_compile = OBJCPP_COMPILE_ACTION_NAME,
     clif_match = CLIF_MATCH_ACTION_NAME,
+    # NOTE: objcopy_embed_data? don't care
 )
 
 # Names of actions that parse or compile C++ code.

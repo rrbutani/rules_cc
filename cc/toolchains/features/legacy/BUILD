@@ -4,6 +4,24 @@ load("//cc/toolchains/impl:external_feature.bzl", "cc_external_feature")
 package(default_visibility = ["//visibility:public"])
 
 # See https://bazel.build/docs/cc-toolchain-config-reference#wellknown-features.
+# See:
+#  - features that are implicitly defined by Bazel (legacy):
+#    https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L21-L22
+#    + these are the features declared in this package
+#  - features referenced (but not necessarily defined):
+#    https://github.com/bazelbuild/bazel/blob/897edaa8ce4c0c4d570d3f279ee96d02604dc5fd/src/main/java/com/google/devtools/build/lib/rules/cpp/CppRuleClasses.java#L125-L527
+
+cc_external_feature(
+    name = "static_link_cpp_runtimes",
+    feature_name = "static_link_cpp_runtimes",
+    overridable = True,
+)
+
+cc_external_feature(
+    name = "supports_interface_shared_libraries",
+    feature_name = "supports_interface_shared_libraries",
+    overridable = True,
+)
 
 cc_external_feature(
     name = "legacy_compile_flags",
@@ -11,11 +29,12 @@ cc_external_feature(
     overridable = True,
 )
 
-cc_external_feature(
-    name = "default_compile_flags",
-    feature_name = "default_compile_flags",
-    overridable = True,
-)
+# not built in anymore?
+# cc_external_feature(
+#     name = "default_compile_flags",
+#     feature_name = "default_compile_flags",
+#     overridable = True,
+# )
 
 cc_external_feature(
     name = "dependency_file",
@@ -24,8 +43,20 @@ cc_external_feature(
 )
 
 cc_external_feature(
+    name = "random_seed",
+    feature_name = "random_seed",
+    overridable = True,
+)
+
+cc_external_feature(
     name = "pic",
     feature_name = "pic",
+    overridable = True,
+)
+
+cc_external_feature(
+    name = "per_object_debug_info",
+    feature_name = "per_object_debug_info",
     overridable = True,
 )
 
@@ -80,6 +111,26 @@ cc_external_feature(
 cc_external_feature(
     name = "autofdo",
     feature_name = "autofdo",
+    overridable = True,
+)
+
+cc_external_feature(
+    name = "propeller_optimize_thinlto_compile_actions",
+    feature_name = "propeller_optimize_thinlto_compile_actions",
+    overridable = True,
+)
+
+cc_external_feature(
+    name = "propeller_optimize",
+    feature_name = "propeller_optimize",
+    overridable = True,
+)
+
+# TODO: gate on bazel versions?
+
+cc_external_feature(
+    name = "memprof_optimize",
+    feature_name = "memprof_optimize",
     overridable = True,
 )
 
@@ -236,10 +287,14 @@ cc_external_feature(
 cc_feature_set(
     name = "all_legacy_builtin_features",
     all_of = [
+        ":static_link_cpp_runtimes",
+        ":supports_interface_shared_libraries",
         ":legacy_compile_flags",
-        ":default_compile_flags",
+        # ":default_compile_flags",
         ":dependency_file",
+        ":random_seed",
         ":pic",
+        ":per_object_debug_info",
         ":preprocessor_defines",
         ":includes",
         ":include_paths",
@@ -249,6 +304,9 @@ cc_feature_set(
         ":cs_fdo_optimize",
         ":fdo_prefetch_hints",
         ":autofdo",
+        ":propeller_optimize_thinlto_compile_actions",
+        ":propeller_optimize",
+        ":memprof_optimize",
         ":build_interface_libraries",
         ":dynamic_library_linker_tool",
         ":shared_flag",

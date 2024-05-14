@@ -65,6 +65,7 @@ cc_tool = rule(
         "src": attr.label(
             allow_files = True,
             cfg = "exec",
+            mandatory = True,
             doc = """The underlying binary that this tool represents.
 
 Usually just a single prebuilt (eg. @sysroot//:bin/clang), but may be any

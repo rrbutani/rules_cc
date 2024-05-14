@@ -39,7 +39,7 @@ Examples:
         name = "warnings_as_errors",
         args = ["-Werror"],
     )
-""",
+""", # TODO: improve these docs, clarify difference between `cc_args(...)`
 )
 
 cc_nested_args = lambda **kwargs: args_wrapper_macro(rule = _cc_nested_args, **kwargs)

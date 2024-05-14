@@ -57,6 +57,13 @@ def _cc_toolchain_config_impl(ctx):
 
     toolchain_config = toolchain_config_info(
         label = ctx.label,
+        # TODO: gate the legacy features in `_builtin_features` on
+        # `no_legacy_features`?
+        #
+        # we should:
+        #  - have this be an attribute you can pass, default true (include_legacy_features = True)
+        #  - error if you attempt to define your own feature named `no_legacy_features`
+        #    + point users to this attribute instead
         features = ctx.attr.toolchain_features + [ctx.attr._builtin_features],
         action_type_configs = ctx.attr.action_type_configs,
         args = ctx.attr.args,
@@ -104,7 +111,8 @@ cc_toolchain_config = rule(
         "_enabled": attr.label(default = "//cc/toolchains:experimental_enable_rule_based_toolchains"),
 
         # Attributes from create_cc_toolchain_config_info.
-        # artifact_name_patterns is currently unused. Consider adding it later.
+        # artifact_name_patterns is currently unused. Consider adding it later. # TODO: needed for macOS; see `unix_cc_toolchain_config.bzl`
+
         # TODO: Consider making this into a label_list that takes a
         #  cc_directory_marker rule as input.
         "cxx_builtin_include_directories": attr.string_list(),

@@ -16,6 +16,7 @@
 load("//cc/toolchains/impl:args_utils.bzl", "get_action_type")
 load(
     "//cc/toolchains/impl:collect.bzl",
+    "collect_action_type_config_sets",
     "collect_action_types",
     "collect_args_lists",
     "collect_features",
@@ -87,7 +88,18 @@ satisfy the currently enabled feature set is used.
             doc = """Labels that point to `cc_arg`s / `cc_arg_list`s that are
 unconditionally bound to the specified actions.
 """,
+        # TODO: what happens if you have args bound to an action w/^ but the arg
+        # doesn't list the action in its `actions` attr?
+        #
+        # answer: they're not applied
+        #
+        # same as if the args object lists actions that aren't in `action_types`
+        # (I think)
+        #
+        # TODO: should we emit a warning for this?
+        # TODO: should we have tests for this
         ),
+         # TODO: technically according to the docs and `crosstool_config.proto` `implies` can also imply other *action configs*... I don't know what this means in practice though: https://github.com/bazelbuild/bazel/blob/cc335fd27e3f8b5a57f98328a67e874d28f4d558/src/main/protobuf/crosstool_config.proto#L340-L344
         "implies": attr.label_list(
             providers = [FeatureSetInfo],
             doc = "Features that should be enabled when this action is used.",
@@ -98,6 +110,9 @@ unconditionally bound to the specified actions.
 
 For example, the c-compile action type might add the C standard library header
 files from the sysroot.
+
+TODO: clarify that these deps are routed into the appropriate `cc_toolchain`
+file group attrs (i.e. `ar_files`)
 """,
         ),
     },
@@ -134,4 +149,19 @@ Examples:
         tools = [":clang_tool"],
     )
 """,
+)
+
+cc_action_type_config_set = rule(
+    implementation = lambda ctx: [
+        collect_action_type_config_sets(
+            targets = ctx.attr.action_type_configs,
+            label = ctx.label,
+        ),
+    ],
+    attrs = dict(
+        action_type_configs = attr.label_list(providers = [ActionTypeConfigSetInfo]),
+    ),
+    provides = [ActionTypeConfigSetInfo],
+    doc = """Allows grouping `cc_action_type_config` targets.""", # TODO
+
 )

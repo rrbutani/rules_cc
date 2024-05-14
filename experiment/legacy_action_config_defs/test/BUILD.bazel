@@ -1,0 +1,50 @@
+
+load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
+load("@rules_cc//cc/toolchains:toolchain.bzl", "cc_toolchain")
+load("//:defs.bzl", "print_cc_toolchain_config_info")
+
+
+cc_feature(
+    name = "no_legacy_features",
+    feature_name = "no_legacy_features",
+    enabled = True,
+    args = [],
+)
+
+#-------------------------------------------------------------------------------
+
+cc_toolchain(
+    name = "with_legacy_toolchain",
+    action_type_configs = [],
+    toolchain_features = [],
+    target_system_name = "",
+    target_cpu = "",
+    target_libc = "",
+    compiler = "",
+)
+print_cc_toolchain_config_info(
+    name = "with_legacy",
+    config = ":_with_legacy_toolchain_config",
+)
+
+#-------------------------------------------------------------------------------
+
+cc_toolchain(
+    name = "without_legacy_toolchain",
+    action_type_configs = [
+        "//legacy_action_config_defs",
+    ],
+    toolchain_features = [
+        # ":no_legacy_features",
+        # TODO: we'd need to define all the features to use ^...
+    ],
+    target_system_name = "",
+    target_cpu = "",
+    target_libc = "",
+    compiler = "",
+)
+
+print_cc_toolchain_config_info(
+    name = "without_legacy",
+    config = ":_without_legacy_toolchain_config",
+)

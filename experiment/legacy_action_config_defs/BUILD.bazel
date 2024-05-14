@@ -1,0 +1,446 @@
+# Ports of the legacy crosstool action configs that are auto-added to your
+# toolchain unless you add a `no_legacy_features` feature:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1025-L1380
+
+load("@rules_cc//cc/toolchains:action_type_config.bzl", "cc_action_type_config", "cc_action_type_config_set")
+load("@rules_cc//cc/toolchains:args_list.bzl", "cc_args_list")
+load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
+load("@rules_cc//cc/toolchains:feature_set.bzl", "cc_feature_set")
+load("@rules_cc//cc/toolchains:format.bzl", "format_arg")
+load("@rules_cc//cc/toolchains:tool.bzl", "cc_tool")
+
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
+package(default_visibility = ["//visibility:public"])
+
+# TODO: the tool `label_flag`s should really be lists but there is no
+# `label_list_flag`...
+
+################################################################################
+
+## Knobs:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1029-L1031
+label_flag(name = "gcc_tool_path", build_setting_default = ":DUMMY_GCC_TOOL")
+label_flag(name = "ar_tool_path", build_setting_default = ":DUMMY_AR_TOOL")
+label_flag(name = "strip_tool_path", build_setting_default = ":DUMMY_STRIP_TOOL")
+
+cc_tool(name = "gcc_tool", src = ":gcc_tool_path")
+cc_tool(name = "ar_tool", src = ":ar_tool_path")
+cc_tool(name = "strip_tool_default", src = ":strip_tool_path")
+
+#-------------------------------------------------------------------------------
+
+## Common feature sets:
+
+cc_feature_set(
+    name = "common_compile_features",
+    all_of = [
+        "@rules_cc//cc/toolchains/features/legacy:legacy_compile_flags",
+        "@rules_cc//cc/toolchains/features/legacy:user_compile_flags",
+        "@rules_cc//cc/toolchains/features/legacy:sysroot",
+        "@rules_cc//cc/toolchains/features/legacy:unfiltered_compile_flags",
+        "@rules_cc//cc/toolchains/features/legacy:compiler_input_flags",
+        "@rules_cc//cc/toolchains/features/legacy:compiler_output_flags",
+    ],
+)
+
+cc_feature_set(
+    name = "common_link_features",
+    all_of = [
+        "@rules_cc//cc/toolchains/features/legacy:strip_debug_symbols",
+        "@rules_cc//cc/toolchains/features/legacy:linkstamps",
+        "@rules_cc//cc/toolchains/features/legacy:output_execpath_flags",
+        "@rules_cc//cc/toolchains/features/legacy:runtime_library_search_directories",
+        "@rules_cc//cc/toolchains/features/legacy:library_search_directories",
+        "@rules_cc//cc/toolchains/features/legacy:libraries_to_link",
+        "@rules_cc//cc/toolchains/features/legacy:user_link_flags",
+        "@rules_cc//cc/toolchains/features/legacy:legacy_link_flags",
+        "@rules_cc//cc/toolchains/features/legacy:linker_param_file",
+        "@rules_cc//cc/toolchains/features/legacy:fission_support",
+        "@rules_cc//cc/toolchains/features/legacy:sysroot",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+cc_feature_set(
+    name = "common_executable_link_features",
+    all_of = [
+        ":common_link_features",
+
+        "@rules_cc//cc/toolchains/features/legacy:force_pic_flags",
+    ],
+)
+
+cc_feature_set(
+    name = "common_dynamic_library_link_features",
+    all_of = [
+        ":common_link_features",
+
+        "@rules_cc//cc/toolchains/features/legacy:build_interface_libraries",
+        "@rules_cc//cc/toolchains/features/legacy:dynamic_library_linker_tool",
+        "@rules_cc//cc/toolchains/features/legacy:shared_flag",
+    ],
+)
+
+################################################################################
+
+## Action type configs:
+# NOTE: for each action config we expose:
+#  - a label_flag for the action config's tool for easy overriding
+#  - a `cc_feature_set` for the action config so that users that wish to replace
+#    the `cc_action_type_config` with their own definition can easily reuse the
+#    list of features implied by the action config by default (if they wish)
+
+# assemble:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1036-L1052
+label_setting(name = "assemble_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "assemble_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "assemble",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:assemble",
+    ],
+    tools = [":assemble_tool"],
+    implies = [":assemble_features"],
+)
+
+# preprocess-assemble:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1053-L1069
+label_setting(name = "preprocess_assemble_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "preprocess_assemble_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "preprocess_assemble",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+    ],
+    tools = [":preprocess_assemble_tool"],
+    implies = [":preprocess_assemble_features"],
+)
+
+# linkstamp-compile:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1070-L1086
+label_setting(name = "linkstamp_compile_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "linkstamp_compile_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "linkstamp_compile",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:linkstamp_compile",
+    ],
+    tools = [":linkstamp_compile_tool"],
+    implies = [":linkstamp_compile_features"],
+)
+
+# lto-backend:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1087-L1103
+label_setting(name = "lto_backend_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "lto_backend_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "lto_backend",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+    ],
+    tools = [":lto_backend_tool"],
+    implies = [":lto_backend_features"],
+)
+
+# c-compile:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1104-L1120
+label_setting(name = "c_compile_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "c_compile_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "c_compile",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+    ],
+    tools = [":c_compile_tool"],
+    implies = [":c_compile_features"],
+)
+
+# c++-compile:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1121-L1137
+label_setting(name = "cpp_compile_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_compile_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "cpp_compile",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+    ],
+    tools = [":cpp_compile_tool"],
+    implies = [":cpp_compile_features"],
+)
+
+# c++-header-parsing:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1138-L1154
+label_setting(name = "cpp_header_parsing_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_header_parsing_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "cpp_header_parsing",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
+    ],
+    tools = [":cpp_header_parsing_tool"],
+    implies = [":cpp_header_parsing_features"],
+)
+
+# c++-module-compile:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1155-L1171
+label_setting(name = "cpp_module_compile_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_module_compile_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "cpp_module_compile",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    tools = [":cpp_module_compile_tool"],
+    implies = [":cpp_module_compile_features"],
+)
+
+# c++-module-codegen:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1172-L1188
+label_setting(name = "cpp_module_codegen_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_module_codegen_features",
+    all_of = [":common_compile_features"],
+)
+cc_action_type_config(
+    name = "cpp_module_codegen",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
+    ],
+    tools = [":cpp_module_codegen_tool"],
+    implies = [":cpp_module_codegen_features"],
+)
+
+# c++-link-executable:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1189-L1211
+label_setting(name = "cpp_link_executable_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_link_executable_features",
+    all_of = [":common_executable_link_features"],
+)
+cc_action_type_config(
+    name = "cpp_link_executable",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_link_executable",
+    ],
+    tools = [":cpp_link_executable_tool"],
+    implies = [":cpp_link_executable_features"],
+)
+
+# lto-index-for-executable:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1212-L1234
+label_setting(name = "lto_index_for_executable_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "lto_index_for_executable_features",
+    all_of = [":common_executable_link_features"],
+)
+cc_action_type_config(
+    name = "lto_index_for_executable",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:lto_index_for_executable",
+    ],
+    tools = [":lto_index_for_executable_tool"],
+    implies = [":lto_index_for_executable_features"],
+)
+
+# c++-link-nodeps-dynamic-library:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1235-L1259
+label_setting(name = "cpp_link_nodeps_dynamic_library_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_link_nodeps_dynamic_library_features",
+    all_of = [":common_dynamic_library_link_features"],
+)
+cc_action_type_config(
+    name = "cpp_link_nodeps_dynamic_library",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_link_nodeps_dynamic_library",
+    ],
+    tools = [":cpp_link_nodeps_dynamic_library_tool"],
+    implies = [":cpp_link_nodeps_dynamic_library_features"],
+)
+
+# lto-index-for-nodeps-dynamic-library:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#1260-L1284
+label_setting(name = "lto_index_for_nodeps_dynamic_library_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "lto_index_for_nodeps_dynamic_library_features",
+    all_of = [":common_dynamic_library_link_features"],
+)
+cc_action_type_config(
+    name = "lto_index_for_nodeps_dynamic_library",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:lto_index_for_nodeps_dynamic_library",
+    ],
+    tools = [":lto_index_for_nodeps_dynamic_library_tool"],
+    implies = [":lto_index_for_nodeps_dynamic_library_features"],
+)
+
+# c++-link-dynamic-library:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1285-L1309
+label_setting(name = "cpp_link_dynamic_library_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "cpp_link_dynamic_library_features",
+    all_of = [":common_dynamic_library_link_features"],
+)
+cc_action_type_config(
+    name = "cpp_link_dynamic_library",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_link_dynamic_library",
+    ],
+    tools = [":cpp_link_dynamic_library_tool"],
+    implies = [":cpp_link_dynamic_library_features"],
+)
+
+# lto-index-for-dynamic-library:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1310-L1333
+label_setting(name = "lto_index_for_dynamic_library_tool", build_setting_default = ":gcc_tool")
+cc_feature_set(
+    name = "lto_index_for_dynamic_library_features",
+    all_of = [":common_dynamic_library_link_features"],
+)
+cc_action_type_config(
+    name = "lto_index_for_dynamic_library",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:lto_index_for_dynamic_library",
+    ],
+    tools = [":lto_index_for_dynamic_library_tool"],
+    implies = [":lto_index_for_dynamic_library_features"],
+)
+
+# c++-link-static-library:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1335-L1347
+label_setting(name = "cpp_link_static_library_tool", build_setting_default = ":ar_tool")
+cc_feature_set(
+    name = "cpp_link_static_library_features",
+    all_of = [
+        "@rules_cc//cc/toolchains/features/legacy:archiver_flags",
+        "@rules_cc//cc/toolchains/features/legacy:linker_param_file",
+    ],
+)
+cc_action_type_config(
+    name = "cpp_link_static_library",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:cpp_link_static_library",
+    ],
+    tools = [":cpp_link_static_library_tool"],
+    implies = [":cpp_link_static_library_features"],
+)
+
+# strip:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1348-L1373
+label_setting(name = "strip_tool", build_setting_default = ":strip_tool_default")
+cc_feature_set(name = "strip_features", all_of = [])
+cc_args_list(
+    name = "strip_args",
+    args = [
+        ":strip_arg_output", ":strip_arg_stripopts", ":strip_arg_input",
+    ] + selects.with_or({
+        # TODO: is this right?
+        # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1582-L1585
+        ("@platforms//os:linux", "@platforms//os:freebsd", "@platforms//os:openbsd"): [
+            ":strip_arg_preserve_dates",
+        ],
+        "//conditions:default": [],
+    }),
+)
+cc_action_type_config(
+    name = "strip",
+    action_types = [
+        "@rules_cc//cc/toolchains/actions:strip",
+    ],
+    tools = [":strip_tool"],
+    implies = [":strip_features"],
+    args = [":strip_args"],
+)
+
+# NOTE: can't have `args` contain a `select` because `cc_args` is a macro that
+# needs to inspect `args`... instead we split this into two `cc_args` and hoist
+# the `select` (see `args` on `strip_args` above):
+# cc_args(
+#     name = "strip_arg_output",
+#     actions = ["@rules_cc//cc/toolchains/actions:strip"],
+#     args = [
+#         "-S",
+#     ] + selects.with_or({
+#         ("@platforms//os:linux", "@platforms//os:freebsd", "@platforms//os:openbsd"): [
+#             "-p", # `--preserve-dates`
+#         ],
+#         "//conditions:default": [],
+#     }) + [
+#         "-o", format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file"),
+#     ],
+# )
+cc_args(
+    name = "strip_arg_output",
+    actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    args = [
+        "-S",
+        "-o", format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file"),
+    ],
+)
+cc_args(
+    name = "strip_arg_preserve_dates",
+    actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    args = ["-p"],  # `--preserve-dates`
+)
+
+cc_args(
+    name = "strip_arg_stripopts",
+    actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    iterate_over = "@rules_cc//cc/toolchains/variables:stripopts",
+    args = [format_arg("%s", "@rules_cc//cc/toolchains/variables:stripopts")],
+)
+cc_args(
+    name = "strip_arg_input",
+    actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    args = [format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file")],
+)
+
+################################################################################
+
+cc_action_type_config_set(
+    name = "legacy_action_config_defs",
+    action_type_configs = [
+        ":assemble",
+        ":preprocess_assemble",
+        ":linkstamp_compile",
+        ":lto_backend",
+        ":c_compile",
+        ":cpp_compile",
+        ":cpp_header_parsing",
+        ":cpp_module_compile",
+        ":cpp_module_codegen",
+        ":cpp_link_executable",
+        ":lto_index_for_executable",
+        ":cpp_link_nodeps_dynamic_library",
+        ":lto_index_for_nodeps_dynamic_library",
+        ":cpp_link_dynamic_library",
+        ":lto_index_for_dynamic_library",
+        ":cpp_link_static_library",
+        ":strip",
+    ]
+)

@@ -177,7 +177,7 @@ Example:
       name = "opt",
       feature_name = "opt",
       ...
-      overrides = "@toolchain//features/well_known:opt",
+      overrides = "//cc/toolchains/features:opt",
     )
 
 """,

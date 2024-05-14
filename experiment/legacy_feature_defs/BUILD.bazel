@@ -1,0 +1,2057 @@
+# Ports of the legacy crosstool features that are auto-added to your toolchain
+# unless you add a `no_legacy_features` feature:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L40-L1023
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1382-L1580
+
+# TODO: pare down
+load("@rules_cc//cc/toolchains:action_type_config.bzl", "cc_action_type_config")
+load("@rules_cc//cc/toolchains:actions.bzl", "cc_action_type_set")
+load("@rules_cc//cc/toolchains:args_list.bzl", "cc_args_list")
+load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
+load("@rules_cc//cc/toolchains:feature_constraint.bzl", "cc_feature_constraint")
+load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
+load("@rules_cc//cc/toolchains:feature_set.bzl", "cc_feature_set")
+load("@rules_cc//cc/toolchains:format.bzl", "format_arg")
+load("@rules_cc//cc/toolchains:mutually_exclusive_category.bzl", "cc_mutually_exclusive_category")
+load("@rules_cc//cc/toolchains:nested_args.bzl", "cc_nested_args")
+load("@rules_cc//cc/toolchains:tool.bzl", "cc_tool")
+load("@rules_cc//cc/toolchains:toolchain.bzl", "cc_toolchain")
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
+package(default_visibility = ["//visibility:public"])
+
+# TODO: is this right?
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1582-L1585
+LINUX = ("@platforms//os:linux", "@platforms//os:freebsd", "@platforms//os:openbsd")
+MACOS = ("@platforms//os:macos",)
+select = selects.with_or
+
+################################################################################
+
+## Knobs:
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L45-L47
+
+# Do we even need this? seems like when the `has_configured_linker_path` feature
+# is *not* present this is overridden with the `_link_dynamic_library_tool`
+# attr's path:
+#  - `has_configured_linker_path` feature: https://github.com/bazelbuild/bazel/blob/b91b2f540bf22f0e20be899464bdcc8205ba947e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainFeatures.java#L1346-L1349
+#    + https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CppLinkActionBuilder.java#L1024-L1028
+#  - overridden: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CppLinkActionBuilder.java#L887-L903
+#  - `_link_dynamic_library_tool`: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainProvider.java#L439-L445
+#    + attr in `cc_toolchain` to specify this: https://github.com/bazelbuild/bazel/blob/ddcf089bd47c1888854081095cfa32fc1227fe3b/src/main/starlark/builtins_bzl/common/cc/cc_toolchain.bzl#L242-L246
+#
+# Edit: actually the above only handles adding `_link_dynamic_library_tool` to
+# the deps and setting it as the tool path for the action; it doesn't handle
+# passing the `LINKER_COMMAND` arg (5th arg) to `_link_dynamic_library_tool`
+# (see here: https://github.com/bazelbuild/bazel/blob/3010e578055a8cbe080bbe54e3137aca4cd8579d/tools/cpp/link_dynamic_library.sh#L92-L93).
+#
+# This means we still need the `dynamic_library_linker_tool` feature to provide
+# this flag.
+#
+# Two approaches to pick from here:
+#  - 1. lean on the tool path rewriting logic (using the
+#       `_link_dynamic_library_tool` attr) that kicks in when the
+#       `has_configured_linker_path` feature is **not** enabled
+#       + this means Bazel handles setting overriding the tool path for the
+#         relevant dynamic linking actions so we don't have to manually update
+#         tools on action configs in situations where we decide to enable this
+#         feature (i.e. a layering violation)
+#       + but... we still do have to handle passing the "linker" path to
+#         `link_dynamic_library.sh` ourselves
+#       + this means embedding our compiler's path in the
+#         `build_interface_libraries` flag set to pass the 5th arg for
+#         `link_dynamic_command.sh` (i.e. a layering violation...)
+#         * hopefully in the future we can sidestep this with a build variable?
+#  - 2. set `has_configured_linker_path` and handle everything ourselves
+#       + this is what @fmeum did in this PR: https://github.com/bazelbuild/bazel/pull/21194/files
+#       + this entails:
+#         * setting the tool for the dynamic library linker actions to the
+#           `link_dynamic_library.sh` wrapper *manually*
+#         * grabbing the tool path for our "linker" (really it's the compiler..)
+#           and manually embedding it into the flag set for
+#           `dynamic_library_linker_tool` to specify the 5th arg for
+#           `link_dynamic_library.sh`..
+#
+# For now we mostly mirror `getLegacyFeature`'s set up; we:
+#   - embed the execpath of the label below into the `build_interface_libraries`
+#     feature's `cc_arg`s
+#
+# Users will need to do one of the following, if enabling
+# `supports_interface_shared_libraries`:
+#   1. **not add** a `has_configured_linker_path` feature and:
+#      - set the label flag below to point at their compiler
+#   2. **add** a `has_configured_linker_path` feature and:
+#      - set the label flag below to point at their compiler
+#      - add `cc_tool` entries for `link_dynamic_command.sh` to all the linking
+#        actions' action configs
+#        + note that these tool entries can/should be gated behind the following
+#          features:
+#          * supports_interface_shared_libraries
+#          * build_interface_libraries
+#          * has_configured_linker_path
+label_flag(
+    name = "cpp_link_dynamic_library_tool_path",
+    # https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1282-L1295
+    build_setting_default = ":DUMMY_LINKER_TOOL",
+)
+
+bool_flag(
+    name = "supports_embedded_runtimes_flag",
+    # https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1340-L1341
+    build_setting_default = False,
+)
+config_setting(
+    name = "embedded_runtimes_enabled",
+    flag_values = {":supports_embedded_runtimes_flag": "True"},
+)
+
+# See comment on `cpp_link_dynamic_library_tool_path`.
+bool_flag(
+    name = "supports_interface_shared_libraries_flag",
+    # https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1342
+    build_setting_default = False,
+)
+config_setting(
+    name = "interface_shared_libraries_enabled",
+    flag_values = {":supports_interface_shared_libraries_flag": "True"},
+)
+
+################################################################################
+
+## Action groups:
+
+alias(name = "all_compile_actions", actual = "@rules_cc//tolchains/actions:compile_actions")
+# alias(name = "all_cpp_compile_actions", actual = "@rules_cc//tolchains/actions:cpp_compile_actions")
+alias(name = "preprocessor_compile_actions", actual = "@rules_cc//tolchains/actions:preprocessor_compile_actions")
+alias(name = "codegen_compile_actions", actual = "@rules_cc//tolchains/actions:codegen_compile_actions")
+# alias(name = "all_link_actions", actual = "@rules_cc//tolchains/actions:all_link_actions")
+# alias(name = "lto_index_actions", actual = "@rules_cc//tolchains/actions:lto_index_actions")
+
+#-------------------------------------------------------------------------------
+
+## Mutually exclusive categories:
+
+cc_mutually_exclusive_category(name = "profile")
+cc_mutually_exclusive_category(name = "csprofile")
+
+################################################################################
+
+## Features from `getLegacyFeatures`:
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L51-L54
+cc_feature(
+    name = "static_link_cpp_runtimes",
+    feature_name = "static_link_cpp_runtimes",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:static_link_cpp_runtimes",
+    enabled = select({
+        ":embedded_runtimes_enabled": True,
+        "//conditions:default": False,
+    }),
+    args = [],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L55-L58
+cc_feature(
+    name = "supports_interface_shared_libraries",
+    feature_name = "supports_interface_shared_libraries",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:supports_interface_shared_libraries",
+    enabled = select({
+        ":interface_shared_libraries_enabled": True,
+        "//conditions:default": False,
+    }),
+    args = [],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L59-L83
+cc_feature(
+    name = "legacy_compile_flags",
+    feature_name = "legacy_compile_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:legacy_compile_flags",
+    enabled = True,
+    args = [":legacy_compile_flags_args"],
+)
+cc_args(
+    name = "legacy_compile_flags_args",
+    actions = [":all_compile_actions"],
+    requires_not_none = "@rules_cc//toolchains/variables:legacy_compile_flags",
+    iterate_over = "@rules_cc//toolchains/variables:legacy_compile_flags",
+    args = [format_arg("%s")],
+) # TODO: check
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L84-L117
+'''
+Gcc options:
+ -MD turns on .d file output as a side-effect (doesn't imply -E)
+ -MM[D] enables user includes only, not system includes
+ -MF <name> specifies the dotd file name
+Issues:
+ -M[M] alone subverts actual .o output (implies -E)
+ -M[M]D alone breaks some of the .d naming assumptions
+This combination gets user and system includes with specified name:
+ -MD -MF <name>
+'''
+cc_feature(
+    name = "dependency_file",
+    feature_name = "dependency_file",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:dependency_file",
+    enabled = True,
+    args = [":dependency_file_args"],
+)
+cc_args(
+    name = "dependency_file_args",
+    actions = [
+        # NOTE: divergence:
+        #   + including: `linkstamp_compile`
+        ":preprocessor_compile_actions",
+        "@rules_cc//cc/toolchains/actions:assemble", # TODO: is this relevant?
+
+        # List in upstream:
+        # "@rules_cc//cc/toolchains/actions:assemble",
+        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+        # "@rules_cc//cc/toolchains/actions:c_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+        # "@rules_cc//cc/toolchains/actions:objc_compile",
+        # "@rules_cc//cc/toolchains/actions:objcpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
+        # "@rules_cc//cc/toolchains/actions:clif_match",
+    ],
+    requires_not_none = "@rules_cc//toolchains/variables:dependency_file",
+    iterate_over = "@rules_cc//toolchains/variables:dependency_file",
+    args = ["-MD", "-MF", format_arg("%s")],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L118-L141
+'''
+GCC and Clang give randomized names to symbols which are defined in an anonymous
+namespace but have external linkage.  To make computation of these
+deterministic, we want to override the default seed for the random number
+generator.  It's safe to use any value which differs for all translation units;
+we use the path to the object file.
+'''
+cc_feature(
+    name = "random_seed",
+    feature_name = "random_seed",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:random_seed",
+    enabled = True,
+    args = [":random_seed_args"],
+)
+cc_args(
+    name = "random_seed_args",
+    actions = [
+        # NOTE: divergence; includes many more actions
+        ":all_compile_actions",
+
+        # TODO: divergence: can this be scoped to all compile actions? (if not,
+        # use the list below)
+        # "@rules_cc//cc/toolchains/actions:c_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    requires_not_none = "@rules_cc//toolchains/variables:output_file",
+    args = [
+        format_arg("-frandom-seed=%s", "@rules_cc//toolchains/variables:output_file"),
+    ],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L142-L162
+cc_feature(
+    name = "pic",
+    feature_name = "pic",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:pic",
+    enabled = True,
+    args = [":pic_args"],
+)
+cc_args(
+    name = "pic_args",
+    actions = [
+        # NOTE: divergence: includes `lto_backend`
+        ":codegen_compile_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    requires_not_none = "@rules_cc//toolchains/variables:pic",
+    args = ["-fPIC"],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L163-L181
+cc_feature(
+    name = "per_object_debug_info",
+    feature_name = "per_object_debug_info",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:per_object_debug_info",
+    enabled = False,
+    args = [":per_object_debug_info_args"],
+)
+cc_args(
+    name = "per_object_debug_info_args",
+    actions = [
+        # NOTE: divergence: includes `lto_backend` and `linkstamp_compile`
+        ":codegen_compile_actions",
+
+        # "@rules_cc//cc/toolchains/actions:assemble",
+        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+        # "@rules_cc//cc/toolchains/actions:c_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
+    ],
+    requires_not_none = "@rules_cc//toolchains/variables:per_object_debug_info_file",
+    args = ["-gsplit-dwarf", "-g"],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L182-L202
+cc_feature(
+    name = "preprocessor_defines",
+    feature_name = "preprocessor_defines",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:preprocessor_defines",
+    enabled = True,
+    args = [":preprocessor_defines_args"],
+)
+cc_args(
+    name = "preprocessor_defines_args",
+    actions = [
+        # NOTE: divergence: includes `objc_compile` and `objcpp_compile`.
+        ":preprocessor_compile_actions",
+    ],
+    iterate_over = "@rules_cc//toolchains/variables:preprocessor_defines",
+    args = [format_arg("-D%s")],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L203-L227
+cc_feature(
+    name = "includes",
+    feature_name = "includes",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:includes",
+    enabled = True,
+    args = [":includes_args"],
+)
+cc_args(
+    name = "includes_args",
+    actions = [":preprocessor_compile_actions"],
+    requires_not_none = "@rules_cc//toolchains/variables:includes",
+    iterate_over = "@rules_cc//toolchains/variables:includes",
+    args = ["-include", format_arg("%s")],
+)
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L228-L264
+cc_feature(
+    name = "include_paths",
+    feature_name = "include_paths",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:include_paths",
+    enabled = True,
+    args = [":include_paths_args"],
+)
+cc_args(
+    name = "include_paths_args",
+    actions = [], # TODO
+    nested = [
+        ":include_paths_quote_include_args",
+        ":include_paths_regular_include_args",
+        ":include_paths_system_include_args",
+        ":include_paths_framework_include_args",
+    ],
+)
+cc_nested_args(
+    name = "include_paths_quote_include_args",
+    # TODO
+)
+cc_nested_args(
+    name = "include_paths_regular_include_args",
+    # TODO
+)
+cc_nested_args(
+    name = "include_paths_system_include_args",
+    # TODO
+)
+cc_nested_args(
+    name = "include_paths_framework_include_args",
+    # TODO
+)
+                # Joiner.on("\n")
+                #     .join(
+                #         "  name: 'include_paths'",
+                #         "  enabled: true",
+                #         "  flag_set {",
+                #         "    action: 'preprocess-assemble'",
+                #         "    action: 'linkstamp-compile'",
+                #         "    action: 'c-compile'",
+                #         "    action: 'c++-compile'",
+                #         "    action: 'c++-header-parsing'",
+                #         "    action: 'c++-module-compile'",
+                #         "    action: 'clif-match'",
+                #         "    action: 'objc-compile'",
+                #         "    action: 'objc++-compile'",
+                #         "    flag_group {",
+                #         "      iterate_over: 'quote_include_paths'",
+                #         "      flag: '-iquote'",
+                #         "      flag: '%{quote_include_paths}'",
+                #         "    }",
+                #         "    flag_group {",
+                #         "      iterate_over: 'include_paths'",
+                #         "      flag: '-I%{include_paths}'",
+                #         "    }",
+                #         "    flag_group {",
+                #         "      iterate_over: 'system_include_paths'",
+                #         "      flag: '-isystem'",
+                #         "      flag: '%{system_include_paths}'",
+                #         "    }",
+                #         "    flag_group {",
+                #         "      iterate_over: 'framework_include_paths'",
+                #         "      flag: '-F%{framework_include_paths}'",
+                #         "    }",
+                #         "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L265-L287
+cc_feature(
+    name = "fdo_instrument",
+    feature_name = "fdo_instrument",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_instrument",
+    enabled = False,
+    mutually_exclusive = [":profile"],
+    args = [":fdo_instrument_args"],
+)
+cc_args(
+    name = "fdo_instrument_args",
+    actions = [],
+    # TODO
+)
+                        # "  name: 'fdo_instrument'",
+                        # "  provides: 'profile'",
+                        # "  flag_set {",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'fdo_instrument_path'",
+                        # "      flag: '-fprofile-generate=%{fdo_instrument_path}'",
+                        # "      flag: '-fno-data-sections'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L288-L306
+cc_feature(
+    name = "fdo_optimize",
+    feature_name = "fdo_optimize",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_optimize",
+    enabled = False,
+    mutually_exclusive = [":profile"],
+    args = [":fdo_optimize_args"],
+)
+cc_args(
+    name = "fdo_optimize_args",
+    actions = [],
+    # TODO
+)
+                    # .join(
+                    #     "  name: 'fdo_optimize'",
+                    #     "  provides: 'profile'",
+                    #     "  flag_set {",
+                    #     "    action: 'c-compile'",
+                    #     "    action: 'c++-compile'",
+                    #     "    flag_group {",
+                    #     "      expand_if_all_available: 'fdo_profile_path'",
+                    #     "      flag: '-fprofile-use=%{fdo_profile_path}'",
+                    #     "      flag: '-Wno-profile-instr-unprofiled'",
+                    #     "      flag: '-Wno-profile-instr-out-of-date'",
+                    #     "      flag: '-fprofile-correction'",
+                    #     "    }",
+                    #     "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L308-L330
+cc_feature(
+    name = "cs_fdo_instrument",
+    feature_name = "cs_fdo_instrument",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:cs_fdo_instrument",
+    enabled = False,
+    mutually_exclusive = [":csprofile"],
+    args = [":cs_fdo_instrument_args"],
+)
+cc_args(
+    name = "cs_fdo_instrument_args",
+    actions = [],
+    # TODO
+)
+                        # "  name: 'cs_fdo_instrument'",
+                        # "  provides: 'csprofile'",
+                        # "  flag_set {",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'lto-backend'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'cs_fdo_instrument_path'",
+                        # "      flag: '-fcs-profile-generate=%{cs_fdo_instrument_path}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L332-L349
+cc_feature(
+    name = "cs_fdo_optimize",
+    feature_name = "cs_fdo_optimize",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:cs_fdo_optimize",
+    enabled = False,
+    mutually_exclusive = [":csprofile"],
+    args = [":cs_fdo_optimize_args"],
+)
+cc_args(
+    name = "cs_fdo_optimize_args",
+    actions = [],
+    # TODO
+)
+
+                    # .join(
+                    #     "  name: 'cs_fdo_optimize'",
+                    #     "  provides: 'csprofile'",
+                    #     "  flag_set {",
+                    #     "    action: 'lto-backend'",
+                    #     "    flag_group {",
+                    #     "      expand_if_all_available: 'fdo_profile_path'",
+                    #     "      flag: '-fprofile-use=%{fdo_profile_path}'",
+                    #     "      flag: '-Wno-profile-instr-unprofiled'",
+                    #     "      flag: '-Wno-profile-instr-out-of-date'",
+                    #     "      flag: '-fprofile-correction'",
+                    #     "    }",
+                    #     "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L351-L367
+cc_feature(
+    name = "fdo_prefetch_hints",
+    feature_name = "fdo_prefetch_hints",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_prefetch_hints",
+    enabled = False,
+    args = [":fdo_prefetch_hints_args"],
+)
+cc_args(
+    name = "fdo_prefetch_hints_args",
+    actions = [],
+    # TODO
+)
+
+                        # "  name: 'fdo_prefetch_hints'",
+                        # "  flag_set {",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'lto-backend'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'fdo_prefetch_hints_path'",
+                        # "      flag: '-mllvm'",
+                        # "      flag: '-prefetch-hints-file=" + "%{fdo_prefetch_hints_path}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L368-L384
+cc_feature(
+    name = "autofdo",
+    feature_name = "autofdo",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:autofdo",
+    enabled = False,
+    mutually_exclusive = [":profile"],
+    args = [":autofdo_args"],
+)
+cc_args(
+    name = "autofdo_args",
+    actions = [],
+    # TODO
+)
+
+                        # "  name: 'autofdo'",
+                        # "  provides: 'profile'",
+                        # "  flag_set {",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'fdo_profile_path'",
+                        # "      flag: '-fauto-profile=%{fdo_profile_path}'",
+                        # "      flag: '-fprofile-correction'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L385-L387
+cc_feature(
+    name = "propeller_optimize_thinlto_compile_actions",
+    feature_name = "propeller_optimize_thinlto_compile_actions",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:propeller_optimize_thinlto_compile_actions",
+    enabled = False,
+    args = [],
+)
+
+        # featureBuilder.add(getFeature("name: 'propeller_optimize_thinlto_compile_actions'"));
+
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L389-L412
+cc_feature(
+    name = "propeller_optimize",
+    feature_name = "propeller_optimize",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:propeller_optimize",
+    enabled = False,
+    args = [":propeller_optimize_compile_args", ":propeller_optimize_link_args"],
+)
+cc_args(
+    name = "propeller_optimize_compile_args",
+    actions = [],
+    # TODO
+)
+cc_args(
+    name = "propeller_optimize_link_args",
+    actions = [],
+    # TODO
+)
+
+
+                # Joiner.on("\n")
+                #     .join(
+                #         "  name: 'propeller_optimize'",
+                #         "  flag_set {",
+                #         "    action: 'c-compile'",
+                #         "    action: 'c++-compile'",
+                #         "    action: 'lto-backend'",
+                #         "    flag_group {",
+                #         "      expand_if_all_available: 'propeller_optimize_cc_path'",
+                #         "      flag: '-fbasic-block-sections=list=%{propeller_optimize_cc_path}'",
+                #         "      flag: '-DBUILD_PROPELLER_TYPE=\"full\"'",
+                #         "    }",
+                #         "  }",
+                #         "  flag_set {",
+                #         "    action: 'c++-link-executable'",
+                #         "    flag_group {",
+                #         "      expand_if_true: 'propeller_optimize_ld_path'",
+                #         "      flag: '-Wl,--symbol-ordering-file=%{propeller_optimize_ld_path}'",
+                #         "    }",
+                #         "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L414-L428
+cc_feature(
+    name = "memprof_optimize",
+    feature_name = "memprof_optimize",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:memprof_optimize",
+    enabled = False,
+    args = [":memprof_optimize_args"],
+)
+cc_args(
+    name = "memprof_optimize_args",
+    actions = [],
+    # TODO
+)
+
+                # Joiner.on("\n")
+                #     .join(
+                #         "  name: 'memprof_optimize'",
+                #         "  flag_set {",
+                #         "    action: 'c-compile'",
+                #         "    action: 'c++-compile'",
+                #         "    flag_group {",
+                #         "      expand_if_all_available: 'memprof_profile_path'",
+                #         "      flag: '-memprof-profile-file=" + "%{memprof_profile_path}'",
+                #         "    }",
+                #         "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L430-L450
+# NOTE: see the comment on `:cpp_link_dynamic_library_tool_path`: using this
+# feature requires careful coordination in tool paths and action configs.
+#
+# TODO: we need a way to reference `cpp_link_dynamic_library_tool_path`'s
+# execpath in `cc_args`...
+cc_feature(
+    name = "build_interface_libraries",
+    feature_name = "build_interface_libraries",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:build_interface_libraries",
+    enabled = False,
+    args = [":build_interface_libraries_args"],
+)
+cc_args(
+    name = "build_interface_libraries_args",
+    actions = [],
+    # TODO
+)
+
+
+                        # "  name: 'build_interface_libraries'",
+                        # "  flag_set {",
+                        # "    with_feature { feature: 'supports_interface_shared_libraries' }",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'generate_interface_library'",
+                        # "      flag: '%{generate_interface_library}'",
+                        # "      flag: '%{interface_library_builder_path}'",
+                        # "      flag: '%{interface_library_input_path}'",
+                        # "      flag: '%{interface_library_output_path}'",
+                        # "      flag: '" + cppLinkDynamicLibraryToolPath + "'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L452-L471
+'''
+Order of feature declaration matters, cppDynamicLibraryLinkerTool has to
+follow right after build_interface_libraries.
+'''
+# TODO: avoid the above by merging this flag group with `build_interface_libraries`!
+# NOTE: divergence: we've moved this feature's arg to
+# `build_interface_libraries`. We retain the feature (a no-op) for
+# compatibility.
+cc_feature(
+    name = "dynamic_library_linker_tool",
+    feature_name = "dynamic_library_linker_tool",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:dynamic_library_linker_tool",
+    enabled = False,
+    args = [],
+)
+
+                        # "  name: 'dynamic_library_linker_tool'",
+                        # "  flag_set {",
+                        # "    with_feature { feature: 'supports_interface_shared_libraries' }",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'generate_interface_library'",
+                        # "      flag: '" + cppLinkDynamicLibraryToolPath + "'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L472-L487
+cc_feature(
+    name = "shared_flag",
+    feature_name = "shared_flag",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:shared_flag",
+    enabled = False,
+    args = [":shared_flag_args"],
+)
+cc_args(
+    name = "shared_flag_args",
+    actions = [],
+    # TODO
+)
+
+                        # "  name: 'shared_flag'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    flag_group {",
+                        # "      flag: '-shared'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L488-L507
+cc_feature(
+    name = "linkstamps",
+    feature_name = "linkstamps",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:linkstamps",
+    enabled = False,
+    args = [":linkstamps_args"],
+)
+cc_args(
+    name = "linkstamps_args",
+    actions = [],
+    # TODO
+)
+
+                        # "  name: 'linkstamps'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'linkstamp_paths'",
+                        # "      iterate_over: 'linkstamp_paths'",
+                        # "      flag: '%{linkstamp_paths}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L508-L527
+cc_feature(
+    name = "output_execpath_flags",
+    feature_name = "output_execpath_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:output_execpath_flags",
+    enabled = False,
+    args = [":output_execpath_flags_args"],
+)
+cc_args(
+    name = "output_execpath_flags_args",
+    actions = [],
+    # TODO
+)
+
+                        # "  name: 'output_execpath_flags'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'output_execpath'",
+                        # "      flag: '-o'",
+                        # "      flag: '%{output_execpath}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L528-L599
+cc_feature(
+    name = "runtime_library_search_directories",
+    feature_name = "runtime_library_search_directories",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:runtime_library_search_directories",
+    enabled = False,
+    args = [
+        ":runtime_library_search_directories_with_static_link_cpp_runtimes_args",
+        ":runtime_library_search_directories_without_static_link_cpp_runtimes_args",
+    ],
+)
+
+cc_args(
+    name = "runtime_library_search_directories_with_static_link_cpp_runtimes_args",
+    actions = [], # TODO
+    requires_any_of = [""],
+    requires_not_none = "",
+    iterate_over = "",
+    nested = [
+        ":rtlsd_static_test_args",
+    ] + select({
+        LINUX: [":rtlsd_static_notest_args_linux"],
+        MACOS: [":rtlsd_static_notest_args_macos"],
+    }),
+)
+cc_nested_args(
+    name = "rtlsd_static_test_args",
+    requires_true = "",
+    args = [],
+)
+cc_nested_args(
+    name = "rtlsd_static_notest_args_linux",
+    requires_false = "",
+    args = [],
+)
+cc_nested_args(
+    name = "rtlsd_static_notest_args_macos",
+    requires_false = "",
+    args = [],
+)
+
+cc_args(
+    name = "runtime_library_search_directories_without_static_link_cpp_runtimes_args",
+    actions = [], # TODO
+    requires_any_of = [""], # TODO: not(static_link_cpp_runtimes)
+    requires_not_none = "",
+    iterate_over = "",
+    nested = select({
+        LINUX: [":rtlsd_nostatic_args_linux"],
+        MACOS: [":rtlsd_nostatic_args_macos"],
+    }),
+)
+cc_nested_args(
+    name = "rtlsd_nostatic_args_linux",
+    args = [
+
+    ],
+)
+cc_nested_args(
+    name = "rtlsd_nostatic_args_macos",
+    args = [
+
+    ],
+)
+
+                    #    "  name: 'runtime_library_search_directories',",
+                    #     "  flag_set {",
+                    #     "    with_feature { feature: 'static_link_cpp_runtimes' }",
+                    #     "    action: 'c++-link-executable'",
+                    #     "    action: 'c++-link-dynamic-library'",
+                    #     "    action: 'c++-link-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-dynamic-library'",
+                    #     "    action: 'lto-index-for-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-executable'",
+                    #     "    flag_group {",
+                    #     "      expand_if_all_available: 'runtime_library_search_directories'",
+                    #     "      iterate_over: 'runtime_library_search_directories'",
+                    #     "      flag_group {",
+                    #     "        expand_if_true: 'is_cc_test'",
+                    #     // TODO(b/27153401): This should probably be @loader_path on osx.
+                    #     "        flag: '-Xlinker'",
+                    #     "        flag: '-rpath'",
+                    #     "        flag: '-Xlinker'",
+                    #     "        flag: '$EXEC_ORIGIN/%{runtime_library_search_directories}'",
+                    #     "      }",
+                    #     "      flag_group {",
+                    #     "        expand_if_false: 'is_cc_test'",
+                    #     ifLinux(
+                    #         platform,
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '-rpath'",
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '$ORIGIN/" + "%{runtime_library_search_directories}'"),
+                    #     ifMac(
+                    #         platform,
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '-rpath'",
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '@loader_path/"
+                    #             + "%{runtime_library_search_directories}'"),
+                    #     "      }",
+                    #     "    }",
+                    #     "  }",
+                    #     "  flag_set {",
+                    #     "    with_feature { not_feature: 'static_link_cpp_runtimes' }",
+                    #     "    action: 'c++-link-executable'",
+                    #     "    action: 'c++-link-dynamic-library'",
+                    #     "    action: 'c++-link-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-dynamic-library'",
+                    #     "    action: 'lto-index-for-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-executable'",
+                    #     "    flag_group {",
+                    #     "      expand_if_all_available: 'runtime_library_search_directories'",
+                    #     "      iterate_over: 'runtime_library_search_directories'",
+                    #     "      flag_group {",
+                    #     ifLinux(
+                    #         platform,
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '-rpath'",
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '$ORIGIN/" + "%{runtime_library_search_directories}'"),
+                    #     ifMac(
+                    #         platform,
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '-rpath'",
+                    #         "        flag: '-Xlinker'",
+                    #         "        flag: '@loader_path/"
+                    #             + "%{runtime_library_search_directories}'"),
+                    #     "    }",
+                    #     "  }",
+                    #     "}")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L600-L619
+cc_feature(
+    name = "library_search_directories",
+    feature_name = "library_search_directories",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:library_search_directories",
+    enabled = False,
+    args = [":library_search_directories_args"],
+)
+cc_args(
+    name = "library_search_directories_args",
+    actions = [],
+    requires_not_none = "",
+    iterate_over = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'library_search_directories'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'library_search_directories'",
+                        # "      iterate_over: 'library_search_directories'",
+                        # "      flag: '-L%{library_search_directories}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L620-L660
+cc_feature(
+    name = "archiver_flags",
+    feature_name = "archiver_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:archiver_flags",
+    enabled = False,
+    args = [":archiver_flags_option_args", ":archiver_flags_source_args"],
+)
+
+cc_args(
+    name = "archiver_flags_option_args",
+    actions = [],
+    nested = select({
+        LINUX: [
+            ":archiver_flags_linux_option_args",
+            ":archiver_flags_linux_output_args",
+        ],
+        MACOS: [
+            ":archiver_flags_macos_option_args",
+            ":archiver_flags_macos_output_args",
+        ], # libtool?
+    }),
+)
+cc_nested_args(name = "archiver_flags_linux_option_args", args = [])
+cc_nested_args(name = "archiver_flags_macos_option_args", args = [])
+cc_nested_args(
+    name = "archiver_flags_linux_output_args",
+    requires_not_none = "",
+    args = [],
+)
+cc_nested_args(
+    name = "archiver_flags_macos_output_args",
+    requires_not_none = "",
+    args = [],
+)
+
+cc_args(
+    name = "archiver_flags_source_args",
+    actions = [],
+    nested = [":archiver_flags_source_args_inner"],
+)
+cc_nested_args(
+    name = "archiver_flags_source_args_inner",
+    requires_not_none = "",
+    iterate_over = "",
+    nested = [
+        ":archiver_flags_source_args_for_object_file",
+        ":archiver_flags_source_args_for_object_file_group",
+    ],
+)
+cc_nested_args(
+    name = "archiver_flags_source_args_for_object_file",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "archiver_flags_source_args_for_object_file_group",
+    requires_equal = "",
+    requires_equal_value = "",
+    iterate_over = "",
+    args = [],
+)
+
+                        # "  name: 'archiver_flags'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-static-library'",
+                        # "    flag_group {",
+                        # ifLinux(platform, "flag: 'rcsD'"),
+                        # ifMac(platform, "flag: '-static'"),
+                        # "    }",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'output_execpath'",
+                        # ifLinux(platform, "flag: '%{output_execpath}'"),
+                        # ifMac(platform, "flag: '-o'", "flag: '%{output_execpath}'"),
+                        # "    }",
+                        # "  }",
+                        # "  flag_set { ",
+                        # "    action: 'c++-link-static-library'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'libraries_to_link'",
+                        # "      iterate_over: 'libraries_to_link'",
+                        # "      flag_group {",
+                        # "        expand_if_equal {",
+                        # "          variable: 'libraries_to_link.type'",
+                        # "          value: 'object_file'",
+                        # "        }",
+                        # "        flag: '%{libraries_to_link.name}'",
+                        # "      }",
+                        # "      flag_group {",
+                        # "        expand_if_equal {",
+                        # "          variable: 'libraries_to_link.type'",
+                        # "          value: 'object_file_group'",
+                        # "        }",
+                        # "        iterate_over: 'libraries_to_link.object_files'",
+                        # "        flag: '%{libraries_to_link.object_files}'",
+                        # "      }",
+                        # "    }",
+                        # "  }")));
+
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L661-L833
+cc_feature(
+    name = "libraries_to_link",
+    feature_name = "libraries_to_link",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:libraries_to_link",
+    enabled = False,
+    args = [":libraries_to_link_args"],
+)
+cc_args(
+    name = "libraries_to_link_args",
+    actions = [], # TODO
+    nested = [
+        ":l2l_thinlto_param_file_args",
+        ":l2l_libraries_args",
+    ],
+)
+cc_nested_args(
+    name = "l2l_thinlto_param_file_args",
+    args = [], # TODO
+)
+cc_nested_args(
+    name = "l2l_libraries_args",
+    requires_not_none = "",
+    iterate_over = "",
+    nested = [
+        ":l2l_libraries_object_file_group_start_lib_args",
+    ] + select({
+        LINUX: [
+            ":l2l_libraries_linux_args_for_whole_archive_static_library_start",
+            ":l2l_libraries_linux_args_for_object_file_group",
+            ":l2l_libraries_linux_args_for_object_file",
+            ":l2l_libraries_linux_args_for_interface_library",
+            ":l2l_libraries_linux_args_for_static_library",
+            ":l2l_libraries_linux_args_for_dynamic_library",
+            ":l2l_libraries_linux_args_for_versioned_dynamic_library",
+            ":l2l_libraries_linux_args_for_whole_archive_static_library_end",
+        ],
+        MACOS: [
+            ":l2l_libraries_macos_args_for_object_file_group",
+                ":l2l_libraries_macos_args_for_object_file_group_for_not_whole_archive",
+                ":l2l_libraries_macos_args_for_object_file_group_for_whole_archive",
+            ":l2l_libraries_macos_args_for_object_file",
+                ":l2l_libraries_macos_args_for_object_file_for_not_whole_archive",
+                ":l2l_libraries_macos_args_for_object_file_for_whole_archive",
+            ":l2l_libraries_macos_args_for_interface_library",
+                ":l2l_libraries_macos_args_for_interface_library_for_not_whole_archive",
+                ":l2l_libraries_macos_args_for_interface_library_for_whole_archive", # TODO: can common these four pairs?
+            ":l2l_libraries_macos_args_for_static_library",
+                ":l2l_libraries_macos_args_for_static_library_for_not_whole_achive",
+                ":l2l_libraries_macos_args_for_static_library_for_whole_achive",
+            ":l2l_libraries_macos_args_for_dynamic_library",
+            ":l2l_libraries_macos_args_for_versioned_dynamic_library",
+        ],
+    }) + [
+        ":l2l_libraries_object_file_group_end_lib_args",
+    ],
+)
+
+# start/end lib:
+cc_nested_args(
+    name = "l2l_libraries_object_file_group_start_lib_args",
+    requires_equal = "",
+    requires_equal_value = "",
+    requires_false = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_object_file_group_end_lib_args",
+    requires_equal = "",
+    requires_equal_value = "",
+    requires_false = "",
+    args = [],
+)
+
+# Linux:
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_whole_archive_static_library_start",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_object_file_group",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_object_file",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_interface_library",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_static_library",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_dynamic_library",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_versioned_dynamic_library",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+cc_nested_args(
+    name = "l2l_libraries_linux_args_for_whole_archive_static_library_end",
+    requires_equal = "",
+    requires_equal_value = "",
+    args = [],
+)
+
+# macOS:
+# TODO
+
+                        # "  name: 'libraries_to_link'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_true: 'thinlto_param_file'",
+                        # "      flag: '-Wl,@%{thinlto_param_file}'",
+                        # "    }",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'libraries_to_link'",
+                        # "      iterate_over: 'libraries_to_link'",
+                        # "      flag_group {",
+                        # "        expand_if_equal: {",
+                        # "          variable: 'libraries_to_link.type'",
+                        # "          value: 'object_file_group'",
+                        # "        }",
+                        # "        expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        # "        flag: '-Wl,--start-lib'",
+                        # "      }",
+                        # ifLinux(
+                        #     platform,
+                        #     "  flag_group {",
+                        #     "    expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "    expand_if_equal: {",
+                        #     "        variable: 'libraries_to_link.type'",
+                        #     "        value: 'static_library'",
+                        #     "    }",
+                        #     "    flag: '-Wl,-whole-archive'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "        variable: 'libraries_to_link.type'",
+                        #     "        value: 'object_file_group'",
+                        #     "    }",
+                        #     "    iterate_over: 'libraries_to_link.object_files'",
+                        #     "    flag: '%{libraries_to_link.object_files}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'object_file'",
+                        #     "    }",
+                        #     "    flag: '%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'interface_library'",
+                        #     "    }",
+                        #     "    flag: '%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'static_library'",
+                        #     "    }",
+                        #     "    flag: '%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'dynamic_library'",
+                        #     "    }",
+                        #     "    flag: '-l%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'versioned_dynamic_library'",
+                        #     "    }",
+                        #     "    flag: '-l:%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "    expand_if_equal: {",
+                        #     "        variable: 'libraries_to_link.type'",
+                        #     "        value: 'static_library'",
+                        #     "    }",
+                        #     "    flag: '-Wl,-no-whole-archive'",
+                        #     "  }"),
+                        # ifMac(
+                        #     platform,
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'object_file_group'",
+                        #     "    }",
+                        #     "    iterate_over: 'libraries_to_link.object_files'",
+                        #     "    flag_group {",
+                        #     "      expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '%{libraries_to_link.object_files}'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '-Wl,-force_load,%{libraries_to_link.object_files}'",
+                        #     "    }",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'object_file'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '-Wl,-force_load,%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'interface_library'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '-Wl,-force_load,%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'static_library'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "    flag_group {",
+                        #     "      expand_if_true: 'libraries_to_link.is_whole_archive'",
+                        #     "      flag: '-Wl,-force_load,%{libraries_to_link.name}'",
+                        #     "    }",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'dynamic_library'",
+                        #     "    }",
+                        #     "    flag: '-l%{libraries_to_link.name}'",
+                        #     "  }",
+                        #     "  flag_group {",
+                        #     "    expand_if_equal: {",
+                        #     "      variable: 'libraries_to_link.type'",
+                        #     "      value: 'versioned_dynamic_library'",
+                        #     "    }",
+                        #     "    flag: '%{libraries_to_link.path}'",
+                        #     "  }"),
+                        # "      flag_group {",
+                        # "        expand_if_equal: {",
+                        # "          variable: 'libraries_to_link.type'",
+                        # "          value: 'object_file_group'",
+                        # "        }",
+                        # "        expand_if_false: 'libraries_to_link.is_whole_archive'",
+                        # "        flag: '-Wl,--end-lib'",
+                        # "      }",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L834-L849
+cc_feature(
+    name = "force_pic_flags",
+    feature_name = "force_pic_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:force_pic_flags",
+    enabled = False,
+    args = [], # TODO: select
+)
+cc_args(
+    name = "force_pic_flags_linux_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+cc_args(
+    name = "force_pic_flags_macos_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+# TODO: spin off tuple for linux select
+
+                        # "  name: 'force_pic_flags'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'force_pic'",
+                        # ifLinux(platform, "flag: '-pie'"),
+                        # ifMac(platform, "flag: '-Wl,-pie'"),
+                        # "    }",
+                        # "  }")))
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L850-L869
+cc_feature(
+    name = "user_link_flags",
+    feature_name = "user_link_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:user_link_flags",
+    enabled = False,
+    args = [":user_link_flags_args"],
+)
+cc_args(
+    name = "user_link_flags_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                    # .join(
+                    #     "  name: 'user_link_flags'",
+                    #     "  flag_set {",
+                    #     "    action: 'c++-link-executable'",
+                    #     "    action: 'c++-link-dynamic-library'",
+                    #     "    action: 'c++-link-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-dynamic-library'",
+                    #     "    action: 'lto-index-for-nodeps-dynamic-library'",
+                    #     "    action: 'lto-index-for-executable'",
+                    #     "    flag_group {",
+                    #     "      expand_if_all_available: 'user_link_flags'",
+                    #     "      iterate_over: 'user_link_flags'",
+                    #     "      flag: '%{user_link_flags}'",
+                    #     "    }",
+                    #     "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L870-L889
+cc_feature(
+    name = "legacy_link_flags",
+    feature_name = "legacy_link_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:legacy_link_flags",
+    enabled = False,
+    args = [":legacy_link_flags_args"],
+)
+cc_args(
+    name = "legacy_link_flags_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'legacy_link_flags'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'legacy_link_flags'",
+                        # "      iterate_over: 'legacy_link_flags'",
+                        # "      flag: '%{legacy_link_flags}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L890-L907
+cc_feature(
+    name = "static_libgcc",
+    feature_name = "static_libgcc",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:static_libgcc",
+    enabled = True,
+    args = [":static_libgcc_args"],
+)
+cc_args(
+    name = "static_libgcc_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'static_libgcc'",
+                        # "  enabled: true",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    with_feature { feature: 'static_link_cpp_runtimes' }",
+                        # "    flag_group {",
+                        # "      flag: '-static-libgcc'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L908-L926
+cc_feature(
+    name = "fission_support",
+    feature_name = "fission_support",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:fission_support",
+    enabled = False,
+    args = [":fission_support_args"],
+)
+cc_args(
+    name = "fission_support_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'fission_support'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'is_using_fission'",
+                        # "      flag: '-Wl,--gdb-index'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L927-L945
+cc_feature(
+    name = "strip_debug_symbols",
+    feature_name = "strip_debug_symbols",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:strip_debug_symbols",
+    enabled = False,
+    args = [":strip_debug_symbols_args"],
+)
+cc_args(
+    name = "strip_debug_symbols_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'strip_debug_symbols'",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'strip_debug_symbols'",
+                        # "      flag: '-Wl,-S'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L948
+cc_feature(
+    name = "coverage",
+    feature_name = "coverage",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:coverage",
+    enabled = False,
+    args = [],
+)
+            # getFeature("  name: 'coverage'"),
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L949-L981
+cc_feature(
+    name = "llvm_coverage_map_format",
+    feature_name = "llvm_coverage_map_format",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:llvm_coverage_map_format",
+    enabled = False,
+    mutually_exclusive = [":profile"],
+    args = [
+        ":llvm_coverage_map_format_compile_args",
+        ":llvm_coverage_map_format_link_args",
+    ],
+)
+cc_args(
+    name = "llvm_coverage_map_format_compile_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+cc_args(
+    name = "llvm_coverage_map_format_link_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+                        # "  name: 'llvm_coverage_map_format'",
+                        # "  provides: 'profile'",
+                        # "  flag_set {",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'objc-compile'",
+                        # "    action: 'objc++-compile'",
+                        # "    flag_group {",
+                        # "      flag: '-fprofile-instr-generate'",
+                        # "      flag: '-fcoverage-mapping'",
+                        # "    }",
+                        # "  }",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    action: 'objc-executable'",
+                        # "    action: 'objc++-executable'",
+                        # "    flag_group {",
+                        # "      flag: '-fprofile-instr-generate'",
+                        # "    }",
+                        # "  }",
+                        # "  requires {",
+                        # "    feature: 'coverage'",
+                        # "  }")),
+
+# TODO: note requires
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L982-L1015
+cc_feature(
+    name = "gcc_coverage_map_format",
+    feature_name = "gcc_coverage_map_format",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:gcc_coverage_map_format",
+    enabled = False,
+    mutually_exclusive = [":profile"],
+    args = [
+        ":gcc_coverage_map_format_compile_args",
+        ":gcc_coverage_map_format_link_args",
+    ],
+)
+cc_args(
+    name = "gcc_coverage_map_format_compile_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+cc_args(
+    name = "gcc_coverage_map_format_link_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'gcc_coverage_map_format'",
+                        # "  provides: 'profile'",
+                        # "  flag_set {",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'objc-compile'",
+                        # "    action: 'objc++-compile'",
+                        # "    action: 'objc-executable'",
+                        # "    action: 'objc++-executable'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'gcov_gcno_file'",
+                        # "      flag: '-fprofile-arcs'",
+                        # "      flag: '-ftest-coverage'",
+                        # "    }",
+                        # "  }",
+                        # "  flag_set {",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    flag_group {",
+                        # "      flag: '--coverage'",
+                        # "    }",
+                        # "  }",
+                        # "  requires {",
+                        # "    feature: 'coverage'",
+                        # "  }")));
+# TODO: note requires
+
+#-------------------------------------------------------------------------------
+
+## Features from `getFeaturesToAppearLastInFeaturesList`:
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1388-L1403
+cc_feature(
+    name = "fully_static_link",
+    feature_name = "fully_static_link",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:fully_static_link",
+    enabled = False,
+    args = [":fully_static_link_args"],
+)
+cc_args(
+    name = "fully_static_link_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+        # featureBuilder.add(
+        #     getFeature(
+        #         Joiner.on("\n")
+        #             .join(
+        #                 "  name: 'fully_static_link'",
+        #                 "  flag_set {",
+        #                 "    action: 'c++-link-executable'",
+        #                 "    action: 'c++-link-dynamic-library'",
+        #                 "    action: 'lto-index-for-dynamic-library'",
+        #                 "    action: 'lto-index-for-executable'",
+        #                 "    flag_group {",
+        #                 "      flag: '-static'",
+        #                 "    }",
+        #                 "  }")));
+
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1404-L1428
+cc_feature(
+    name = "user_compile_flags",
+    feature_name = "user_compile_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:user_compile_flags",
+    enabled = True,
+    args = [":user_compile_flags_args"],
+)
+cc_args(
+    name = "user_compile_flags_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+        # featureBuilder.add(
+        #     getFeature(
+        #         Joiner.on("\n")
+        #             .join(
+        #                 "  name: 'user_compile_flags'",
+        #                 "  enabled: true",
+        #                 "  flag_set {",
+        #                 "    action: 'assemble'",
+        #                 "    action: 'preprocess-assemble'",
+        #                 "    action: 'linkstamp-compile'",
+        #                 "    action: 'c-compile'",
+        #                 "    action: 'c++-compile'",
+        #                 "    action: 'c++-header-parsing'",
+        #                 "    action: 'c++-module-compile'",
+        #                 "    action: 'c++-module-codegen'",
+        #                 "    action: 'lto-backend'",
+        #                 "    action: 'clif-match'",
+        #                 "    flag_group {",
+        #                 "      expand_if_all_available: 'user_compile_flags'",
+        #                 "      iterate_over: 'user_compile_flags'",
+        #                 "      flag: '%{user_compile_flags}'",
+        #                 "    }",
+        #                 "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1429-L1456
+cc_feature(
+    name = "sysroot",
+    feature_name = "sysroot",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:sysroot",
+    enabled = True,
+    args = [":sysroot_args"],
+)
+cc_args(
+    name = "sysroot_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'sysroot'",
+                        # "  enabled: true",
+                        # "  flag_set {",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'linkstamp-compile'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'c++-header-parsing'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'c++-link-executable'",
+                        # "    action: 'c++-link-dynamic-library'",
+                        # "    action: 'c++-link-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-dynamic-library'",
+                        # "    action: 'lto-index-for-nodeps-dynamic-library'",
+                        # "    action: 'lto-index-for-executable'",
+                        # "    action: 'clif-match'",
+                        # "    action: 'lto-backend'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'sysroot'",
+                        # "      flag: '--sysroot=%{sysroot}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1457-L1485
+'''
+unfiltered_compile_flags contain system include paths. These must be added
+after the user provided options (present in legacy_compile_flags build
+variable above), otherwise users adding include paths will not pick up their own
+include paths first.
+''' # TODO: is ordering preserved here?
+cc_feature(
+    name = "unfiltered_compile_flags",
+    feature_name = "unfiltered_compile_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:unfiltered_compile_flags",
+    enabled = True,
+    args = [":unfiltered_compile_flags_args"],
+)
+cc_args(
+    name = "unfiltered_compile_flags_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'unfiltered_compile_flags'",
+                        # "  enabled: true",
+                        # "  flag_set {",
+                        # "    action: 'assemble'",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'linkstamp-compile'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'c++-header-parsing'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'c++-module-codegen'",
+                        # "    action: 'lto-backend'",
+                        # "    action: 'clif-match'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'unfiltered_compile_flags'",
+                        # "      iterate_over: 'unfiltered_compile_flags'",
+                        # "      flag: '%{unfiltered_compile_flags}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1486-L1512
+cc_feature(
+    name = "linker_param_file",
+    feature_name = "linker_param_file",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:linker_param_file",
+    enabled = False,
+    args = [":linker_param_file_args"],
+)
+cc_args(
+    name = "linker_param_file_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+# NOTE: divergence; not using a separate flag set for `c++-link-static-library`
+# (the flag is the same at this point...)
+
+        # String dynamicLibraryParamFile = "      flag: '@%{linker_param_file}'";
+        # featureBuilder.add(
+        #     getFeature(
+        #         Joiner.on("\n")
+        #             .join(
+        #                 "  name: 'linker_param_file'",
+        #                 "  flag_set {",
+        #                 "    action: 'c++-link-executable'",
+        #                 "    action: 'c++-link-dynamic-library'",
+        #                 "    action: 'c++-link-nodeps-dynamic-library'",
+        #                 "    action: 'lto-index-for-dynamic-library'",
+        #                 "    action: 'lto-index-for-nodeps-dynamic-library'",
+        #                 "    action: 'lto-index-for-executable'",
+        #                 "    flag_group {",
+        #                 "      expand_if_all_available: 'linker_param_file'",
+        #                 dynamicLibraryParamFile,
+        #                 "    }",
+        #                 "  }",
+        #                 "  flag_set {",
+        #                 "    action: 'c++-link-static-library'",
+        #                 "    flag_group {",
+        #                 "      expand_if_all_available: 'linker_param_file'",
+        #                 "      flag: '@%{linker_param_file}'",
+        #                 "    }",
+        #                 "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1513-L1538
+cc_feature(
+    name = "compiler_input_flags",
+    feature_name = "compiler_input_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:compiler_input_flags",
+    enabled = True,
+    args = [":compiler_input_flags_args"],
+)
+cc_args(
+    name = "compiler_input_flags_args",
+    actions = [],
+    requires_not_none = "",
+    args = [],
+    # TODO
+)
+
+
+                        # "  name: 'compiler_input_flags'",
+                        # "  enabled: true",
+                        # "  flag_set {",
+                        # "    action: 'assemble'",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'linkstamp-compile'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'c++-module-codegen'",
+                        # "    action: 'objc-compile'",
+                        # "    action: 'objc++-compile'",
+                        # "    action: 'c++-header-parsing'",
+                        # "    action: 'lto-backend'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'source_file'",
+                        # "      flag: '-c'",
+                        # "      flag: '%{source_file}'",
+                        # "    }",
+                        # "  }")));
+
+# https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1540-L1573
+cc_feature(
+    name = "compiler_output_flags",
+    feature_name = "compiler_output_flags",
+    overrides = "@rules_cc//cc/toolchain/features/legacy:compiler_output_flags",
+    enabled = True,
+    args = [":compiler_output_flags_args"],
+)
+cc_args(
+    name = "compiler_output_flags_args",
+    actions = [], # TODO
+    nested = [
+        ":compiler_output_flags_assembly_file_args",
+        ":compiler_output_flags_preprocess_file_args",
+        ":compiler_output_flags_output_file_args",
+    ],
+)
+cc_nested_args(
+    name = "compiler_output_flags_assembly_file_args",
+    requires_not_none = "", # TODO,
+    args = [], # TODO
+)
+cc_nested_args(
+    name = "compiler_output_flags_preprocess_file_args",
+    requires_not_none = "", # TODO,
+    args = [], # TODO
+)
+cc_nested_args(
+    name = "compiler_output_flags_output_file_args",
+    requires_not_none = "", # TODO,
+    args = [], # TODO
+)
+
+                        # "  name: 'compiler_output_flags'",
+                        # "  enabled: true",
+                        # "  flag_set {",
+                        # "    action: 'assemble'",
+                        # "    action: 'preprocess-assemble'",
+                        # "    action: 'c-compile'",
+                        # "    action: 'c++-compile'",
+                        # "    action: 'linkstamp-compile'",
+                        # "    action: 'c++-module-compile'",
+                        # "    action: 'c++-module-codegen'",
+                        # "    action: 'objc-compile'",
+                        # "    action: 'objc++-compile'",
+                        # "    action: 'c++-header-parsing'",
+                        # "    action: 'lto-backend'",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'output_assembly_file'",
+                        # "      flag: '-S'",
+                        # "    }",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'output_preprocess_file'",
+                        # "      flag: '-E'",
+                        # "    }",
+                        # "    flag_group {",
+                        # "      expand_if_all_available: 'output_file'",
+                        # "      flag: '-o'",
+                        # "      flag: '%{output_file}'",
+                        # "    }",
+                        # "  }")));
+
+################################################################################
+
+ALL_LEGACY_FEATURES = [
+    ":static_link_cpp_runtimes",
+    ":supports_interface_shared_libraries",
+    ":legacy_compile_flags",
+    ":dependency_file",
+    ":random_seed",
+    ":pic",
+    ":per_object_debug_info",
+    ":preprocessor_defines",
+    ":includes",
+    ":include_paths",
+    ":fdo_instrument",
+    ":fdo_optimize",
+    ":cs_fdo_instrument",
+    ":cs_fdo_optimize",
+    ":fdo_prefetch_hints",
+    ":autofdo",
+    ":propeller_optimize_thinlto_compile_actions",
+    ":propeller_optimize",
+    ":memprof_optimize",
+    ":build_interface_libraries",
+    ":dynamic_library_linker_tool",
+    ":shared_flag",
+    ":linkstamps",
+    ":output_execpath_flags",
+    ":runtime_library_search_directories",
+    ":library_search_directories",
+    ":archiver_flags",
+    ":libraries_to_link",
+    ":force_pic_flags",
+    ":user_link_flags",
+    ":legacy_link_flags",
+    ":static_libgcc",
+    ":fission_support",
+    ":strip_debug_symbols",
+    ":coverage",
+    ":llvm_coverage_map_format",
+    ":gcc_coverage_map_format",
+    ":fully_static_link",
+    ":user_compile_flags",
+    ":sysroot",
+    ":unfiltered_compile_flags",
+    ":linker_param_file",
+    ":compiler_input_flags",
+    ":compiler_output_flags",
+]
+
+cc_feature_set(
+    name = "legacy_feature_defs",
+    all_of = ALL_LEGACY_FEATURES,
+)
+
+# TODO: tests where we go and add these features one at a time and do a diff
+# against the builtin legacy definition...
+#
+# vis: private
+
+# 44 features to implement

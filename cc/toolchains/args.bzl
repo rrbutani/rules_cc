@@ -73,6 +73,8 @@ def _cc_args_impl(ctx):
             args = tuple([args]),
             files = files,
             by_action = tuple([
+                # NOTE: `args[0].actions` still has the full list of action
+                # types though...
                 struct(action = action, args = tuple([args]), files = files)
                 for action in actions.to_list()
             ]),
@@ -113,6 +115,7 @@ Examples:
     cc_args(
         name = "warnings_as_errors",
         args = ["-Werror"],
+        # TODO: actions?
     )
 """,
 )

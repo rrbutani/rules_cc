@@ -69,6 +69,11 @@ cc_action_type(
 )
 
 cc_action_type(
+    name = "llvm_cov",
+    action_name = ACTION_NAMES.llvm_cov,
+)
+
+cc_action_type(
     name = "lto_indexing",
     action_name = ACTION_NAMES.lto_indexing,
 )
@@ -129,6 +134,7 @@ cc_action_type(
     name = "ld_embed_data_action",  # # copybara-comment-this-out-please
     action_name = "ld_embed_data",  # # copybara-comment-this-out-please
 )  # # copybara-comment-this-out-please
+# TODO: fix?
 
 # To make things simple, both internal and external rules will refer to
 # ld_embed_data, but externally it will evaluate to the empty set.
@@ -207,6 +213,49 @@ cc_action_type_set(
 )
 
 cc_action_type_set(
+    name = "preprocessor_compile_actions",
+    # Subset of `compile_actions`: commented out actions don't use the
+    # preprocessor.
+    actions = [
+        ":linkstamp_compile",
+        ":cpp_compile",
+        ":cpp_header_parsing",
+        ":cpp_module_compile",
+        # ":cpp_module_codegen",
+        # ":lto_backend",
+        ":clif_match",
+
+        ":c_compile",
+
+        ":preprocess_assemble",
+        # ":assemble", # doesn't use the preprocessor
+
+        # NOTE: divergence; we're including the objective-c(++) actions:
+        ":objc_compile",
+        ":objcpp_compile",
+    ],
+)
+
+cc_action_type_set(
+    name = "codegen_compile_actions",
+    # Subset of `compile_actions`: commented out actions don't do codegen.
+    actions = [
+        ":linkstamp_compile",
+        ":cpp_compile",
+        # ":cpp_header_parsing",
+        # ":cpp_module_compile",
+        ":cpp_module_codegen",
+        ":lto_backend",
+        # ":clif_match",
+
+        ":c_compile",
+
+        ":preprocess_assemble",
+        ":assemble",
+    ],
+)
+
+cc_action_type_set(
     name = "link_actions",
     actions = [
         ":link_executable_actions",
@@ -250,6 +299,15 @@ cc_action_type_set(
 )
 
 cc_action_type_set(
+    name = "lto_index_actions",
+    actions = [
+        ":lto_index_for_executable",
+        ":lto_index_for_dynamic_library",
+        ":lto_index_for_nodeps_dynamic_library",
+    ],
+)
+
+cc_action_type_set(
     name = "all_actions",
     actions = [
         ":c_compile",
@@ -262,6 +320,7 @@ cc_action_type_set(
         ":cpp_module_compile",
         ":assemble",
         ":preprocess_assemble",
+        ":llvm_cov",
         ":lto_indexing",
         ":lto_backend",
         ":lto_index_for_executable",
