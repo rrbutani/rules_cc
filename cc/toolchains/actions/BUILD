@@ -209,6 +209,10 @@ cc_action_type_set(
         ":cpp_compile_actions",
         ":c_compile",
         ":assembly_actions",
+
+        # NOTE: divergence; we're including the objective-c(++) actions: (TODO)
+        ":objc_compile",
+        ":objcpp_compile",
     ],
 )
 
@@ -230,7 +234,7 @@ cc_action_type_set(
         ":preprocess_assemble",
         # ":assemble", # doesn't use the preprocessor
 
-        # NOTE: divergence; we're including the objective-c(++) actions:
+        # NOTE: divergence; we're including the objective-c(++) actions: (TODO)
         ":objc_compile",
         ":objcpp_compile",
     ],
@@ -252,12 +256,18 @@ cc_action_type_set(
 
         ":preprocess_assemble",
         ":assemble",
+
+        # NOTE: divergence; we're including the objective-c(++) actions: (TODO)
+        ":objc_compile",
+        ":objcpp_compile",
     ],
 )
 
 cc_action_type_set(
     name = "link_actions",
     actions = [
+        # NOTE: purposefully excludes `cpp_link_static_library` (ar/libtool, not
+        # ld).
         ":link_executable_actions",
         ":dynamic_library_link_actions",
     ],
@@ -274,10 +284,17 @@ cc_action_type_set(
 cc_action_type_set(
     name = "dynamic_library_link_actions",
     actions = [
-        ":cpp_link_dynamic_library",
-        ":lto_index_for_dynamic_library",
+        ":with_deps_dynamic_library_link_actions",
         ":nodeps_dynamic_library_link_actions",
     ],
+)
+
+cc_action_type_set(
+    name = "with_deps_dynamic_library_link_actions",
+    actions = [
+        ":cpp_link_dynamic_library",
+        ":lto_index_for_dynamic_library",
+    ]
 )
 
 cc_action_type_set(

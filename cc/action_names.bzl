@@ -88,7 +88,7 @@ OBJC_EXECUTABLE_ACTION_NAME = "objc-executable"
 # A string constant for the objc fully-link link action.
 OBJC_FULLY_LINK_ACTION_NAME = "objc-fully-link"
 
-# A string constant for the clif action.
+# A string constant for the clif action (https://github.com/google/clif).
 CLIF_MATCH_ACTION_NAME = "clif-match"
 
 ACTION_NAMES = struct(

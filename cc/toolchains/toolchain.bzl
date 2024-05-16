@@ -179,6 +179,10 @@ _LEGACY_FILE_GROUPS = {
 #  11. PR adding missing variables, adding links to source code, etc.
 #  12. sorting features is bad, actually! order of the features affects order of
 #      expanded arguments (open an issue)
+#  13. tweak `arg_utils` and `nested_args`'s type checking to "apply"
+#      `iterate_over` after the `requires_*` attributes operate (on `List[T]`
+#      instead of `T`) — this matches what Bazel does
+#  14. relax the mutually exclusive `requires_*` attribute restriction
 #
 #  ?. where to put unix_cc recreation using this stuff..
 #     - is there interest? should I clean it up and add test ensuring the proto

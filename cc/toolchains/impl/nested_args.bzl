@@ -16,6 +16,7 @@
 load("@bazel_skylib//lib:structs.bzl", "structs")
 load("//cc:cc_toolchain_config_lib.bzl", "flag_group", "variable_with_value")
 load("//cc/toolchains:cc_toolchain_info.bzl", "NestedArgsInfo", "VariableInfo")
+load(":args_utils.bzl", "REQUIREMENT_ORDERING")
 load(":collect.bzl", "collect_files", "collect_provider")
 
 visibility([
@@ -317,8 +318,8 @@ def nested_args_provider(
 
     # We may want to reconsider this down the line, but it's easier to open up
     # an API than to lock down an API.
-    if len(has_value) > 1:
-        fail(REQUIRES_MUTUALLY_EXCLUSIVE_ERR)
+    # if len(has_value) > 1: # TODO: crosstool doesn't have this restriction...
+    #     fail(REQUIRES_MUTUALLY_EXCLUSIVE_ERR)
 
     kwargs = {}
     requires_types = {}
@@ -330,38 +331,42 @@ def nested_args_provider(
     if iterate_over:
         kwargs["iterate_over"] = iterate_over
 
+    # NOTE: for type checking should we apply `iterate_over` *after* all the
+    # requires; this is how Bazel interprets the `expand_if_*` options:
+    # https://github.com/bazelbuild/bazel/blob/b91b2f540bf22f0e20be899464bdcc8205ba947e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainFeatures.java#L371-L428
+
     if requires_not_none:
         kwargs["expand_if_available"] = requires_not_none
         requires_types.setdefault(requires_not_none, []).append(struct(
             msg = REQUIRES_NOT_NONE_ERR,
             valid_types = ["option"],
-            after_option_unwrap = False,
+            ordering = REQUIREMENT_ORDERING.before_option_unwrap,
         ))
         unwrap_options.append(requires_not_none)
-    elif requires_none:
+    if requires_none:
         kwargs["expand_if_not_available"] = requires_none
         requires_types.setdefault(requires_none, []).append(struct(
             msg = REQUIRES_NONE_ERR,
             valid_types = ["option"],
-            after_option_unwrap = False,
+            ordering = REQUIREMENT_ORDERING.before_option_unwrap,
         ))
-    elif requires_true:
+    if requires_true:
         kwargs["expand_if_true"] = requires_true
         requires_types.setdefault(requires_true, []).append(struct(
             msg = REQUIRES_TRUE_ERR,
             valid_types = ["bool"],
-            after_option_unwrap = True,
+            ordering = REQUIREMENT_ORDERING.after_option_unwrap,
         ))
         unwrap_options.append(requires_true)
-    elif requires_false:
+    if requires_false:
         kwargs["expand_if_false"] = requires_false
         requires_types.setdefault(requires_false, []).append(struct(
             msg = REQUIRES_FALSE_ERR,
             valid_types = ["bool"],
-            after_option_unwrap = True,
+            ordering = REQUIREMENT_ORDERING.after_option_unwrap,
         ))
         unwrap_options.append(requires_false)
-    elif requires_equal:
+    if requires_equal:
         if not requires_equal_value:
             fail(REQUIRES_EQUAL_VALUE_ERR)
         kwargs["expand_if_equal"] = variable_with_value(
@@ -372,7 +377,7 @@ def nested_args_provider(
         requires_types.setdefault(requires_equal, []).append(struct(
             msg = REQUIRES_EQUAL_ERR,
             valid_types = ["string"],
-            after_option_unwrap = True,
+            ordering = REQUIREMENT_ORDERING.after_option_unwrap,
         ))
 
     for arg in args:
@@ -381,7 +386,7 @@ def nested_args_provider(
             requires_types.setdefault(var_name, []).append(struct(
                 msg = FORMAT_ARGS_ERR,
                 valid_types = ["string", "file", "directory"],
-                after_option_unwrap = True,
+                ordering = REQUIREMENT_ORDERING.after_iterate,
             ))
 
     if args:

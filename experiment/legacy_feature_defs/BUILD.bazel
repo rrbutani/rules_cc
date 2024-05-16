@@ -122,12 +122,14 @@ config_setting(
 
 ## Action groups:
 
-alias(name = "all_compile_actions", actual = "@rules_cc//tolchains/actions:compile_actions")
-# alias(name = "all_cpp_compile_actions", actual = "@rules_cc//tolchains/actions:cpp_compile_actions")
-alias(name = "preprocessor_compile_actions", actual = "@rules_cc//tolchains/actions:preprocessor_compile_actions")
-alias(name = "codegen_compile_actions", actual = "@rules_cc//tolchains/actions:codegen_compile_actions")
-# alias(name = "all_link_actions", actual = "@rules_cc//tolchains/actions:all_link_actions")
-# alias(name = "lto_index_actions", actual = "@rules_cc//tolchains/actions:lto_index_actions")
+alias(name = "all_compile_actions", actual = "@rules_cc//cc/toolchains/actions:compile_actions")
+alias(name = "preprocessor_compile_actions", actual = "@rules_cc//cc/toolchains/actions:preprocessor_compile_actions")
+alias(name = "codegen_compile_actions", actual = "@rules_cc//cc/toolchains/actions:codegen_compile_actions")
+alias(name = "all_link_actions", actual = "@rules_cc//cc/toolchains/actions:link_actions")
+# NOTE: despite the name ^ excludes `cpp_link_static_library` (which actually
+# invokes `ar`); this is purposeful.
+alias(name = "dynamic_library_link_actions", actual = "@rules_cc//cc/toolchains/actions:dynamic_library_link_actions")
+alias(name = "link_executable_actions", actual = "@rules_cc//cc/toolchains/actions:link_executable_actions")
 
 #-------------------------------------------------------------------------------
 
@@ -136,6 +138,23 @@ alias(name = "codegen_compile_actions", actual = "@rules_cc//tolchains/actions:c
 cc_mutually_exclusive_category(name = "profile")
 cc_mutually_exclusive_category(name = "csprofile")
 
+#-------------------------------------------------------------------------------
+
+## Feature constraints:
+
+cc_feature_constraint(
+    name = "no_static_link_cpp_runtimes",
+    none_of = [
+        "@rules_cc//cc/toolchains/features/legacy:static_link_cpp_runtimes",
+    ],
+)
+cc_feature_constraint(
+    name = "yes_static_link_cpp_runtimes",
+    all_of = [
+        "@rules_cc//cc/toolchains/features/legacy:static_link_cpp_runtimes",
+    ],
+)
+
 ################################################################################
 
 ## Features from `getLegacyFeatures`:
@@ -143,8 +162,7 @@ cc_mutually_exclusive_category(name = "csprofile")
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L51-L54
 cc_feature(
     name = "static_link_cpp_runtimes",
-    feature_name = "static_link_cpp_runtimes",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:static_link_cpp_runtimes",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:static_link_cpp_runtimes",
     enabled = select({
         ":embedded_runtimes_enabled": True,
         "//conditions:default": False,
@@ -155,8 +173,7 @@ cc_feature(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L55-L58
 cc_feature(
     name = "supports_interface_shared_libraries",
-    feature_name = "supports_interface_shared_libraries",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:supports_interface_shared_libraries",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:supports_interface_shared_libraries",
     enabled = select({
         ":interface_shared_libraries_enabled": True,
         "//conditions:default": False,
@@ -167,18 +184,17 @@ cc_feature(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L59-L83
 cc_feature(
     name = "legacy_compile_flags",
-    feature_name = "legacy_compile_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:legacy_compile_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:legacy_compile_flags",
     enabled = True,
     args = [":legacy_compile_flags_args"],
 )
 cc_args(
     name = "legacy_compile_flags_args",
     actions = [":all_compile_actions"],
-    requires_not_none = "@rules_cc//toolchains/variables:legacy_compile_flags",
-    iterate_over = "@rules_cc//toolchains/variables:legacy_compile_flags",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:legacy_compile_flags",
+    iterate_over = "@rules_cc//cc/toolchains/variables:legacy_compile_flags",
     args = [format_arg("%s")],
-) # TODO: check
+)
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L84-L117
 '''
@@ -194,8 +210,7 @@ This combination gets user and system includes with specified name:
 '''
 cc_feature(
     name = "dependency_file",
-    feature_name = "dependency_file",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:dependency_file",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:dependency_file",
     enabled = True,
     args = [":dependency_file_args"],
 )
@@ -206,21 +221,12 @@ cc_args(
         #   + including: `linkstamp_compile`
         ":preprocessor_compile_actions",
         "@rules_cc//cc/toolchains/actions:assemble", # TODO: is this relevant?
-
-        # List in upstream:
-        # "@rules_cc//cc/toolchains/actions:assemble",
-        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
-        # "@rules_cc//cc/toolchains/actions:c_compile",
-        # "@rules_cc//cc/toolchains/actions:cpp_compile",
-        # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
-        # "@rules_cc//cc/toolchains/actions:objc_compile",
-        # "@rules_cc//cc/toolchains/actions:objcpp_compile",
-        # "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
-        # "@rules_cc//cc/toolchains/actions:clif_match",
     ],
-    requires_not_none = "@rules_cc//toolchains/variables:dependency_file",
-    iterate_over = "@rules_cc//toolchains/variables:dependency_file",
-    args = ["-MD", "-MF", format_arg("%s")],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:dependency_file",
+    args = [
+        "-MD", "-MF",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:dependency_file"),
+    ],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L118-L141
@@ -233,8 +239,7 @@ we use the path to the object file.
 '''
 cc_feature(
     name = "random_seed",
-    feature_name = "random_seed",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:random_seed",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:random_seed",
     enabled = True,
     args = [":random_seed_args"],
 )
@@ -251,17 +256,19 @@ cc_args(
         # "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
         # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
     ],
-    requires_not_none = "@rules_cc//toolchains/variables:output_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_file",
     args = [
-        format_arg("-frandom-seed=%s", "@rules_cc//toolchains/variables:output_file"),
+        format_arg(
+            "-frandom-seed=%s",
+            "@rules_cc//cc/toolchains/variables:output_file",
+        ),
     ],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L142-L162
 cc_feature(
     name = "pic",
-    feature_name = "pic",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:pic",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:pic",
     enabled = True,
     args = [":pic_args"],
 )
@@ -272,15 +279,14 @@ cc_args(
         ":codegen_compile_actions",
         "@rules_cc//cc/toolchains/actions:cpp_module_compile",
     ],
-    requires_not_none = "@rules_cc//toolchains/variables:pic",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:pic",
     args = ["-fPIC"],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L163-L181
 cc_feature(
     name = "per_object_debug_info",
-    feature_name = "per_object_debug_info",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:per_object_debug_info",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:per_object_debug_info",
     enabled = False,
     args = [":per_object_debug_info_args"],
 )
@@ -289,22 +295,15 @@ cc_args(
     actions = [
         # NOTE: divergence: includes `lto_backend` and `linkstamp_compile`
         ":codegen_compile_actions",
-
-        # "@rules_cc//cc/toolchains/actions:assemble",
-        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
-        # "@rules_cc//cc/toolchains/actions:c_compile",
-        # "@rules_cc//cc/toolchains/actions:cpp_compile",
-        # "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
     ],
-    requires_not_none = "@rules_cc//toolchains/variables:per_object_debug_info_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:per_object_debug_info_file",
     args = ["-gsplit-dwarf", "-g"],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L182-L202
 cc_feature(
     name = "preprocessor_defines",
-    feature_name = "preprocessor_defines",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:preprocessor_defines",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:preprocessor_defines",
     enabled = True,
     args = [":preprocessor_defines_args"],
 )
@@ -314,37 +313,35 @@ cc_args(
         # NOTE: divergence: includes `objc_compile` and `objcpp_compile`.
         ":preprocessor_compile_actions",
     ],
-    iterate_over = "@rules_cc//toolchains/variables:preprocessor_defines",
+    iterate_over = "@rules_cc//cc/toolchains/variables:preprocessor_defines",
     args = [format_arg("-D%s")],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L203-L227
 cc_feature(
     name = "includes",
-    feature_name = "includes",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:includes",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:includes",
     enabled = True,
     args = [":includes_args"],
 )
 cc_args(
     name = "includes_args",
     actions = [":preprocessor_compile_actions"],
-    requires_not_none = "@rules_cc//toolchains/variables:includes",
-    iterate_over = "@rules_cc//toolchains/variables:includes",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:includes",
+    iterate_over = "@rules_cc//cc/toolchains/variables:includes",
     args = ["-include", format_arg("%s")],
 )
 
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L228-L264
 cc_feature(
     name = "include_paths",
-    feature_name = "include_paths",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:include_paths",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:include_paths",
     enabled = True,
     args = [":include_paths_args"],
 )
 cc_args(
     name = "include_paths_args",
-    actions = [], # TODO
+    actions = [":preprocessor_compile_actions"],
     nested = [
         ":include_paths_quote_include_args",
         ":include_paths_regular_include_args",
@@ -354,19 +351,23 @@ cc_args(
 )
 cc_nested_args(
     name = "include_paths_quote_include_args",
-    # TODO
+    iterate_over = "@rules_cc//cc/toolchains/variables:quote_include_paths",
+    args = ["-iquote", format_arg("%s")],
 )
 cc_nested_args(
     name = "include_paths_regular_include_args",
-    # TODO
+    iterate_over = "@rules_cc//cc/toolchains/variables:include_paths",
+    args = [format_arg("-I%s")],
 )
 cc_nested_args(
     name = "include_paths_system_include_args",
-    # TODO
+    iterate_over = "@rules_cc//cc/toolchains/variables:system_include_paths",
+    args = ["-isystem", format_arg("%s")],
 )
 cc_nested_args(
     name = "include_paths_framework_include_args",
-    # TODO
+    iterate_over = "@rules_cc//cc/toolchains/variables:framework_include_paths",
+    args = [format_arg("-F%s")],
 )
                 # Joiner.on("\n")
                 #     .join(
@@ -405,16 +406,26 @@ cc_nested_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L265-L287
 cc_feature(
     name = "fdo_instrument",
-    feature_name = "fdo_instrument",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_instrument",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:fdo_instrument",
     enabled = False,
     mutually_exclusive = [":profile"],
     args = [":fdo_instrument_args"],
 )
 cc_args(
     name = "fdo_instrument_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        ":all_link_actions",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:fdo_instrument_path",
+    args = [
+        format_arg(
+            "-fprofile-generate=%s",
+            "@rules_cc//cc/toolchains/variables:fdo_instrument_path",
+        ),
+        "-fno-data-sections",
+    ],
 )
                         # "  name: 'fdo_instrument'",
                         # "  provides: 'profile'",
@@ -437,16 +448,27 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L288-L306
 cc_feature(
     name = "fdo_optimize",
-    feature_name = "fdo_optimize",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_optimize",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:fdo_optimize",
     enabled = False,
     mutually_exclusive = [":profile"],
     args = [":fdo_optimize_args"],
 )
 cc_args(
     name = "fdo_optimize_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+    args = [
+        format_arg(
+            "-fprofile-use=%s",
+            "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+        ),
+        "-Wno-profile-instr-unprofiled",
+        "-Wno-profile-instr-out-of-date",
+        "-fprofile-correction",
+    ],
 )
                     # .join(
                     #     "  name: 'fdo_optimize'",
@@ -466,16 +488,26 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L308-L330
 cc_feature(
     name = "cs_fdo_instrument",
-    feature_name = "cs_fdo_instrument",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:cs_fdo_instrument",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:cs_fdo_instrument",
     enabled = False,
     mutually_exclusive = [":csprofile"],
     args = [":cs_fdo_instrument_args"],
 )
 cc_args(
     name = "cs_fdo_instrument_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+        ":all_link_actions",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:cs_fdo_instrument_path",
+    args = [
+        format_arg(
+            "-fcs-profile-generate=%s",
+            "@rules_cc//cc/toolchains/variables:cs_fdo_instrument_path",
+        )
+    ],
 )
                         # "  name: 'cs_fdo_instrument'",
                         # "  provides: 'csprofile'",
@@ -498,16 +530,25 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L332-L349
 cc_feature(
     name = "cs_fdo_optimize",
-    feature_name = "cs_fdo_optimize",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:cs_fdo_optimize",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:cs_fdo_optimize",
     enabled = False,
     mutually_exclusive = [":csprofile"],
     args = [":cs_fdo_optimize_args"],
 )
 cc_args(
+    # Same as `:fdo_optimize_args` but only scoped to `lto_backend`.
     name = "cs_fdo_optimize_args",
-    actions = [],
-    # TODO
+    actions = ["@rules_cc//cc/toolchains/actions:lto_backend"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+    args = [
+        format_arg(
+            "-fprofile-use=%s",
+            "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+        ),
+        "-Wno-profile-instr-unprofiled",
+        "-Wno-profile-instr-out-of-date",
+        "-fprofile-correction",
+    ],
 )
 
                     # .join(
@@ -527,15 +568,25 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L351-L367
 cc_feature(
     name = "fdo_prefetch_hints",
-    feature_name = "fdo_prefetch_hints",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:fdo_prefetch_hints",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:fdo_prefetch_hints",
     enabled = False,
     args = [":fdo_prefetch_hints_args"],
 )
 cc_args(
     name = "fdo_prefetch_hints_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:fdo_prefetch_hints_path",
+    args = [
+        "-mllvm",
+        format_arg(
+            "-prefetch-hints-file=%s",
+            "@rules_cc//cc/toolchains/variables:fdo_prefetch_hints_path",
+        ),
+    ],
 )
 
                         # "  name: 'fdo_prefetch_hints'",
@@ -553,16 +604,25 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L368-L384
 cc_feature(
     name = "autofdo",
-    feature_name = "autofdo",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:autofdo",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:autofdo",
     enabled = False,
     mutually_exclusive = [":profile"],
     args = [":autofdo_args"],
 )
 cc_args(
     name = "autofdo_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+    args = [
+        format_arg(
+            "-fauto-profile=%s",
+            "@rules_cc//cc/toolchains/variables:fdo_profile_path",
+        ),
+        "-fprofile-correction",
+    ],
 )
 
                         # "  name: 'autofdo'",
@@ -580,8 +640,7 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L385-L387
 cc_feature(
     name = "propeller_optimize_thinlto_compile_actions",
-    feature_name = "propeller_optimize_thinlto_compile_actions",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:propeller_optimize_thinlto_compile_actions",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:propeller_optimize_thinlto_compile_actions",
     enabled = False,
     args = [],
 )
@@ -592,20 +651,38 @@ cc_feature(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L389-L412
 cc_feature(
     name = "propeller_optimize",
-    feature_name = "propeller_optimize",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:propeller_optimize",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:propeller_optimize",
     enabled = False,
     args = [":propeller_optimize_compile_args", ":propeller_optimize_link_args"],
 )
 cc_args(
     name = "propeller_optimize_compile_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:propeller_optimize_cc_path",
+    args = [
+        format_arg(
+            "-fbasic-block-sections=list=%s",
+            "@rules_cc//cc/toolchains/variables:propeller_optimize_cc_path",
+        ),
+        '-DBUILD_PROPELLER_TYPE="full"',
+    ],
 )
 cc_args(
     name = "propeller_optimize_link_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:cpp_link_executable",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:propeller_optimize_ld_path",
+    args = [
+        format_arg(
+            "-Wl,--symbol-ordering-file=%s",
+            "@rules_cc//cc/toolchains/variables:propeller_optimize_ld_path",
+        )
+    ],
 )
 
 
@@ -633,15 +710,23 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L414-L428
 cc_feature(
     name = "memprof_optimize",
-    feature_name = "memprof_optimize",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:memprof_optimize",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:memprof_optimize",
     enabled = False,
     args = [":memprof_optimize_args"],
 )
 cc_args(
     name = "memprof_optimize_args",
-    actions = [],
-    # TODO
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:memprof_profile_path",
+    args = [
+        format_arg(
+            "-memprof-profile-file=%s",
+            "@rules_cc//cc/toolchains/variables:memprof_profile_path",
+        ),
+    ],
 )
 
                 # Joiner.on("\n")
@@ -659,22 +744,27 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L430-L450
 # NOTE: see the comment on `:cpp_link_dynamic_library_tool_path`: using this
 # feature requires careful coordination in tool paths and action configs.
-#
-# TODO: we need a way to reference `cpp_link_dynamic_library_tool_path`'s
-# execpath in `cc_args`...
 cc_feature(
     name = "build_interface_libraries",
-    feature_name = "build_interface_libraries",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:build_interface_libraries",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:build_interface_libraries",
     enabled = False,
     args = [":build_interface_libraries_args"],
 )
 cc_args(
     name = "build_interface_libraries_args",
-    actions = [],
-    # TODO
+    actions = [":dynamic_library_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:generate_interface_library",
+    args = [
+        # For context about these args see:
+        # https://github.com/bazelbuild/bazel/blob/3010e578055a8cbe080bbe54e3137aca4cd8579d/tools/cpp/link_dynamic_library.sh#L45-L55
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:generate_interface_library"),
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:interface_library_builder_path"),
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:interface_library_input_path"),
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:interface_library_output_path"),
+        "$(execpath :cpp_link_dynamic_library_tool_path)"
+    ],
+    data = [":cpp_link_dynamic_library_tool_path"],
 )
-
 
                         # "  name: 'build_interface_libraries'",
                         # "  flag_set {",
@@ -689,7 +779,7 @@ cc_args(
                         # "      flag: '%{interface_library_builder_path}'",
                         # "      flag: '%{interface_library_input_path}'",
                         # "      flag: '%{interface_library_output_path}'",
-                        # "      flag: '" + cppLinkDynamicLibraryToolPath + "'",
+                        # "      flag: '" + cppLinkDynamicLibraryToolPath + "'", # added! see comment below
                         # "    }",
                         # "  }")));
 
@@ -698,14 +788,12 @@ cc_args(
 Order of feature declaration matters, cppDynamicLibraryLinkerTool has to
 follow right after build_interface_libraries.
 '''
-# TODO: avoid the above by merging this flag group with `build_interface_libraries`!
 # NOTE: divergence: we've moved this feature's arg to
 # `build_interface_libraries`. We retain the feature (a no-op) for
 # compatibility.
 cc_feature(
     name = "dynamic_library_linker_tool",
-    feature_name = "dynamic_library_linker_tool",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:dynamic_library_linker_tool",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:dynamic_library_linker_tool",
     enabled = False,
     args = [],
 )
@@ -726,15 +814,14 @@ cc_feature(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L472-L487
 cc_feature(
     name = "shared_flag",
-    feature_name = "shared_flag",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:shared_flag",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:shared_flag",
     enabled = False,
     args = [":shared_flag_args"],
 )
 cc_args(
     name = "shared_flag_args",
-    actions = [],
-    # TODO
+    actions = [":dynamic_library_link_actions"],
+    args = ["-shared"],
 )
 
                         # "  name: 'shared_flag'",
@@ -751,15 +838,16 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L488-L507
 cc_feature(
     name = "linkstamps",
-    feature_name = "linkstamps",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:linkstamps",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:linkstamps",
     enabled = False,
     args = [":linkstamps_args"],
 )
 cc_args(
     name = "linkstamps_args",
-    actions = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:linkstamp_paths",
+    iterate_over = "@rules_cc//cc/toolchains/variables:linkstamp_paths",
+    args = [format_arg("%s")],
 )
 
                         # "  name: 'linkstamps'",
@@ -780,15 +868,18 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L508-L527
 cc_feature(
     name = "output_execpath_flags",
-    feature_name = "output_execpath_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:output_execpath_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:output_execpath_flags",
     enabled = False,
     args = [":output_execpath_flags_args"],
 )
 cc_args(
     name = "output_execpath_flags_args",
-    actions = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_execpath",
+    args = [
+        "-o",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:output_execpath"),
+    ],
 )
 
                         # "  name: 'output_execpath_flags'",
@@ -809,8 +900,7 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L528-L599
 cc_feature(
     name = "runtime_library_search_directories",
-    feature_name = "runtime_library_search_directories",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:runtime_library_search_directories",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:runtime_library_search_directories",
     enabled = False,
     args = [
         ":runtime_library_search_directories_with_static_link_cpp_runtimes_args",
@@ -820,10 +910,10 @@ cc_feature(
 
 cc_args(
     name = "runtime_library_search_directories_with_static_link_cpp_runtimes_args",
-    actions = [], # TODO
-    requires_any_of = [""],
-    requires_not_none = "",
-    iterate_over = "",
+    actions = [":all_link_actions"],
+    requires_any_of = [":yes_static_link_cpp_runtimes"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+    iterate_over = "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
     nested = [
         ":rtlsd_static_test_args",
     ] + select({
@@ -833,41 +923,70 @@ cc_args(
 )
 cc_nested_args(
     name = "rtlsd_static_test_args",
-    requires_true = "",
-    args = [],
+    requires_true = "@rules_cc//cc/toolchains/variables:is_cc_test",
+    args = [
+        "-Xlinker", "-rpath",
+        "-Xlinker", format_arg(
+            # TODO(b/27153401): This should probably be @loader_path on osx.
+            "$EXEC_ORIGIN/%s",
+            "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+        ),
+    ],
 )
 cc_nested_args(
     name = "rtlsd_static_notest_args_linux",
-    requires_false = "",
-    args = [],
+    requires_false = "@rules_cc//cc/toolchains/variables:is_cc_test",
+    args = [
+        "-Xlinker", "-rpath",
+        "-Xlinker", format_arg(
+            "$ORIGIN/%s",
+            "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+        ),
+    ],
 )
 cc_nested_args(
     name = "rtlsd_static_notest_args_macos",
-    requires_false = "",
-    args = [],
+    requires_false = "@rules_cc//cc/toolchains/variables:is_cc_test",
+    args = [
+        "-Xlinker", "-rpath",
+        "-Xlinker", format_arg(
+            "@loader_path/%s",
+            "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+        ),
+    ],
 )
 
 cc_args(
     name = "runtime_library_search_directories_without_static_link_cpp_runtimes_args",
-    actions = [], # TODO
-    requires_any_of = [""], # TODO: not(static_link_cpp_runtimes)
-    requires_not_none = "",
-    iterate_over = "",
+    actions = [":all_link_actions"],
+    requires_any_of = [":no_static_link_cpp_runtimes"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+    iterate_over = "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
     nested = select({
         LINUX: [":rtlsd_nostatic_args_linux"],
         MACOS: [":rtlsd_nostatic_args_macos"],
     }),
 )
 cc_nested_args(
+    # Same as `rtlsd_static_notest_args_linux` but without `!is_cc_test`.
     name = "rtlsd_nostatic_args_linux",
     args = [
-
+        "-Xlinker", "-rpath",
+        "-Xlinker", format_arg(
+            "$ORIGIN/%s",
+            "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+        ),
     ],
 )
 cc_nested_args(
+    # Same as `rtlsd_static_notest_args_macos` but without `!is_cc_test`.
     name = "rtlsd_nostatic_args_macos",
     args = [
-
+        "-Xlinker", "-rpath",
+        "-Xlinker", format_arg(
+            "@loader_path/%s",
+            "@rules_cc//cc/toolchains/variables:runtime_library_search_directories",
+        ),
     ],
 )
 
@@ -941,18 +1060,16 @@ cc_nested_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L600-L619
 cc_feature(
     name = "library_search_directories",
-    feature_name = "library_search_directories",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:library_search_directories",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:library_search_directories",
     enabled = False,
     args = [":library_search_directories_args"],
 )
 cc_args(
     name = "library_search_directories_args",
-    actions = [],
-    requires_not_none = "",
-    iterate_over = "",
-    args = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:library_search_directories",
+    iterate_over = "@rules_cc//cc/toolchains/variables:library_search_directories",
+    args = [format_arg("-L%s")],
 )
 
 
@@ -974,48 +1091,45 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L620-L660
 cc_feature(
     name = "archiver_flags",
-    feature_name = "archiver_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:archiver_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:archiver_flags",
     enabled = False,
     args = [":archiver_flags_option_args", ":archiver_flags_source_args"],
 )
 
 cc_args(
     name = "archiver_flags_option_args",
-    actions = [],
+    actions = ["@rules_cc//cc/toolchains/actions:cpp_link_static_library"],
     nested = select({
         LINUX: [
             ":archiver_flags_linux_option_args",
             ":archiver_flags_linux_output_args",
         ],
-        MACOS: [
+        MACOS: [ # for libtool, I think
             ":archiver_flags_macos_option_args",
             ":archiver_flags_macos_output_args",
-        ], # libtool?
+        ],
     }),
 )
-cc_nested_args(name = "archiver_flags_linux_option_args", args = [])
-cc_nested_args(name = "archiver_flags_macos_option_args", args = [])
+# See: https://man7.org/linux/man-pages/man1/ar.1.html
+cc_nested_args(name = "archiver_flags_linux_option_args", args = ["rcsD"])
 cc_nested_args(
     name = "archiver_flags_linux_output_args",
-    requires_not_none = "",
-    args = [],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_execpath",
+    args = [format_arg("%s", "@rules_cc//cc/toolchains/variables:output_execpath")],
 )
+# See: https://www.linux.org/docs/man1/libtool.html
+cc_nested_args(name = "archiver_flags_macos_option_args", args = ["-static"])
 cc_nested_args(
     name = "archiver_flags_macos_output_args",
-    requires_not_none = "",
-    args = [],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_execpath",
+    args = ["-o", format_arg("%s", "@rules_cc//cc/toolchains/variables:output_execpath")],
 )
 
 cc_args(
     name = "archiver_flags_source_args",
-    actions = [],
-    nested = [":archiver_flags_source_args_inner"],
-)
-cc_nested_args(
-    name = "archiver_flags_source_args_inner",
-    requires_not_none = "",
-    iterate_over = "",
+    actions = ["@rules_cc//cc/toolchains/actions:cpp_link_static_library"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link",
+    iterate_over = "@rules_cc//cc/toolchains/variables:libraries_to_link",
     nested = [
         ":archiver_flags_source_args_for_object_file",
         ":archiver_flags_source_args_for_object_file_group",
@@ -1023,16 +1137,19 @@ cc_nested_args(
 )
 cc_nested_args(
     name = "archiver_flags_source_args_for_object_file",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == object_file` implies this isn't None)
+    args = [format_arg(
+        "%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "archiver_flags_source_args_for_object_file_group",
-    requires_equal = "",
-    requires_equal_value = "",
-    iterate_over = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file_group",
+    iterate_over = "@rules_cc//cc/toolchains/variables:libraries_to_link.object_files",
+    args = [format_arg("%s")],
 )
 
                         # "  name: 'archiver_flags'",
@@ -1075,14 +1192,13 @@ cc_nested_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L661-L833
 cc_feature(
     name = "libraries_to_link",
-    feature_name = "libraries_to_link",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:libraries_to_link",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:libraries_to_link",
     enabled = False,
     args = [":libraries_to_link_args"],
 )
 cc_args(
     name = "libraries_to_link_args",
-    actions = [], # TODO
+    actions = [":all_link_actions"],
     nested = [
         ":l2l_thinlto_param_file_args",
         ":l2l_libraries_args",
@@ -1090,12 +1206,21 @@ cc_args(
 )
 cc_nested_args(
     name = "l2l_thinlto_param_file_args",
-    args = [], # TODO
+    # NOTE: divergence: upstream uses `expand_if_true` (requires_true) instead
+    # of `expand_if_all_available` (requires_not_none) here...
+    #
+    # Perhaps an empty string (false-y) is used instead of this variable being
+    # unavailable..
+    requires_not_none = "@rules_cc//cc/toolchains/variables:thinlto_param_file",
+    args = [format_arg(
+        "-Wl,@%s",
+        "@rules_cc//cc/toolchains/variables:thinlto_param_file",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_args",
-    requires_not_none = "",
-    iterate_over = "",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link",
+    iterate_over = "@rules_cc//cc/toolchains/variables:libraries_to_link",
     nested = [
         ":l2l_libraries_object_file_group_start_lib_args",
     ] + select({
@@ -1133,67 +1258,85 @@ cc_nested_args(
 # start/end lib:
 cc_nested_args(
     name = "l2l_libraries_object_file_group_start_lib_args",
-    requires_equal = "",
-    requires_equal_value = "",
-    requires_false = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file_group",
+    requires_false = "@rules_cc//cc/toolchains/variables:libraries_to_link.is_whole_archive",
+    args = ["-Wl,--start-lib"],
 )
 cc_nested_args(
     name = "l2l_libraries_object_file_group_end_lib_args",
-    requires_equal = "",
-    requires_equal_value = "",
-    requires_false = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file_group",
+    requires_false = "@rules_cc//cc/toolchains/variables:libraries_to_link.is_whole_archive",
+    args = ["-Wl,--end-lib"],
 )
 
 # Linux:
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_whole_archive_static_library_start",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "static_library",
+    requires_true = "@rules_cc//cc/toolchains/variables:libraries_to_link.is_whole_archive",
+    args = ["-Wl,-whole-archive"],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_object_file_group",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file_group",
+    iterate_over = "@rules_cc//cc/toolchains/variables:libraries_to_link.object_files",
+    args = [format_arg("%s")],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_object_file",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "object_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == object_file` implies this isn't None)
+    args = [format_arg(
+        "%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_interface_library",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "interface_library",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == interface_library` implies this isn't None)
+    args = [format_arg(
+        "%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_static_library",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "static_library",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == static_library` implies this isn't None)
+    args = [format_arg(
+        "%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_dynamic_library",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "dynamic_library",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == dynamic_library` implies this isn't None)
+    args = [format_arg(
+        "-l%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_versioned_dynamic_library",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "versioned_dynamic_library",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:libraries_to_link.name", # NOTE: required because we can't represent enums in the type system (`type == versioned_dynamic_library` implies this isn't None)
+    args = [format_arg(
+        "-l:%s", "@rules_cc//cc/toolchains/variables:libraries_to_link.name",
+    )],
 )
 cc_nested_args(
     name = "l2l_libraries_linux_args_for_whole_archive_static_library_end",
-    requires_equal = "",
-    requires_equal_value = "",
-    args = [],
+    requires_equal = "@rules_cc//cc/toolchains/variables:libraries_to_link.type",
+    requires_equal_value = "static_library",
+    requires_true = "@rules_cc//cc/toolchains/variables:libraries_to_link.is_whole_archive",
+    args = ["-Wl,-no-whole-archive"],
 )
 
 # macOS:
@@ -1370,27 +1513,25 @@ cc_nested_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L834-L849
 cc_feature(
     name = "force_pic_flags",
-    feature_name = "force_pic_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:force_pic_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:force_pic_flags",
     enabled = False,
-    args = [], # TODO: select
+    args = select({
+        LINUX: [":force_pic_flags_linux_args"],
+        MACOS: [":force_pic_flags_macos_args"],
+    })
 )
 cc_args(
     name = "force_pic_flags_linux_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":link_executable_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:force_pic",
+    args = ["-pie"],
 )
 cc_args(
     name = "force_pic_flags_macos_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":link_executable_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:force_pic",
+    args = ["-Wl,-pie"], # TODO: does still need to be separate for macOS?
 )
-
-# TODO: spin off tuple for linux select
 
                         # "  name: 'force_pic_flags'",
                         # "  flag_set {",
@@ -1406,19 +1547,17 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L850-L869
 cc_feature(
     name = "user_link_flags",
-    feature_name = "user_link_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:user_link_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:user_link_flags",
     enabled = False,
     args = [":user_link_flags_args"],
 )
 cc_args(
     name = "user_link_flags_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:user_link_flags",
+    iterate_over = "@rules_cc//cc/toolchains/variables:user_link_flags",
+    args = [format_arg("%s")],
 )
-
 
                     # .join(
                     #     "  name: 'user_link_flags'",
@@ -1439,19 +1578,17 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L870-L889
 cc_feature(
     name = "legacy_link_flags",
-    feature_name = "legacy_link_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:legacy_link_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:legacy_link_flags",
     enabled = False,
     args = [":legacy_link_flags_args"],
 )
 cc_args(
     name = "legacy_link_flags_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:legacy_link_flags",
+    iterate_over = "@rules_cc//cc/toolchains/variables:legacy_link_flags",
+    args = [format_arg("%s")],
 )
-
 
                         # "  name: 'legacy_link_flags'",
                         # "  flag_set {",
@@ -1471,17 +1608,18 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L890-L907
 cc_feature(
     name = "static_libgcc",
-    feature_name = "static_libgcc",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:static_libgcc",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:static_libgcc",
     enabled = True,
     args = [":static_libgcc_args"],
 )
 cc_args(
     name = "static_libgcc_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":link_executable_actions",
+        "@rules_cc//cc/toolchains/actions:with_deps_dynamic_library_link_actions",
+    ],
+    requires_any_of = [":yes_static_link_cpp_runtimes"],
+    args = ["-static-libgcc"],
 )
 
 
@@ -1501,19 +1639,16 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L908-L926
 cc_feature(
     name = "fission_support",
-    feature_name = "fission_support",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:fission_support",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:fission_support",
     enabled = False,
     args = [":fission_support_args"],
 )
 cc_args(
     name = "fission_support_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:is_using_fission",
+    args = ["-Wl,--gdb-index"],
 )
-
 
                         # "  name: 'fission_support'",
                         # "  flag_set {",
@@ -1532,17 +1667,15 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L927-L945
 cc_feature(
     name = "strip_debug_symbols",
-    feature_name = "strip_debug_symbols",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:strip_debug_symbols",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:strip_debug_symbols",
     enabled = False,
     args = [":strip_debug_symbols_args"],
 )
 cc_args(
     name = "strip_debug_symbols_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_link_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:strip_debug_symbols",
+    args = ["-Wl,-S"],
 )
 
 
@@ -1563,8 +1696,7 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L948
 cc_feature(
     name = "coverage",
-    feature_name = "coverage",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:coverage",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:coverage",
     enabled = False,
     args = [],
 )
@@ -1573,10 +1705,10 @@ cc_feature(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L949-L981
 cc_feature(
     name = "llvm_coverage_map_format",
-    feature_name = "llvm_coverage_map_format",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:llvm_coverage_map_format",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:llvm_coverage_map_format",
     enabled = False,
     mutually_exclusive = [":profile"],
+    requires_any_of = ["@rules_cc//cc/toolchains/features/legacy:coverage"],
     args = [
         ":llvm_coverage_map_format_compile_args",
         ":llvm_coverage_map_format_link_args",
@@ -1584,17 +1716,33 @@ cc_feature(
 )
 cc_args(
     name = "llvm_coverage_map_format_compile_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        # NOTE: divergence; we're including:
+        #   - linkstamp_compile
+        #   - cpp_module_codegen
+        #   - lto_backend
+        #   - assemble
+        ":codegen_compile_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+
+        # # Upstream has just:
+        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+        # "@rules_cc//cc/toolchains/actions:c_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+        # "@rules_cc//cc/toolchains/actions:objc_compile",
+        # "@rules_cc//cc/toolchains/actions:objcpp_compile",
+    ],
+    args = ["-fprofile-instr-generate", "-fcoverage-mapping"],
 )
 cc_args(
     name = "llvm_coverage_map_format_link_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":all_link_actions",
+        "@rules_cc//cc/toolchains/actions:objc_executable",
+        "@rules_cc//cc/toolchains/actions:objcpp_executable",
+    ],
+    args = ["-fprofile-instr-generate"],
 )
 
                         # "  name: 'llvm_coverage_map_format'",
@@ -1628,15 +1776,13 @@ cc_args(
                         # "    feature: 'coverage'",
                         # "  }")),
 
-# TODO: note requires
-
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L982-L1015
 cc_feature(
     name = "gcc_coverage_map_format",
-    feature_name = "gcc_coverage_map_format",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:gcc_coverage_map_format",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:gcc_coverage_map_format",
     enabled = False,
     mutually_exclusive = [":profile"],
+    requires_any_of = ["@rules_cc//cc/toolchains/features/legacy:coverage"],
     args = [
         ":gcc_coverage_map_format_compile_args",
         ":gcc_coverage_map_format_link_args",
@@ -1644,19 +1790,35 @@ cc_feature(
 )
 cc_args(
     name = "gcc_coverage_map_format_compile_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        # NOTE: same as above, divergence; we're including:
+        #   - linkstamp_compile
+        #   - cpp_module_codegen
+        #   - lto_backend
+        #   - assemble
+        ":codegen_compile_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+
+        # # Upstream has just:
+        # "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+        # "@rules_cc//cc/toolchains/actions:c_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_compile",
+        # "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+        # "@rules_cc//cc/toolchains/actions:objc_compile",
+        # "@rules_cc//cc/toolchains/actions:objcpp_compile",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:gcov_gcno_file",
+    args = ["-fprofile-arcs", "-ftest-coverage"],
 )
 cc_args(
     name = "gcc_coverage_map_format_link_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":all_link_actions",
+        "@rules_cc//cc/toolchains/actions:objc_executable",
+        "@rules_cc//cc/toolchains/actions:objcpp_executable",
+    ],
+    args = ["--coverage"],
 )
-
 
                         # "  name: 'gcc_coverage_map_format'",
                         # "  provides: 'profile'",
@@ -1689,8 +1851,6 @@ cc_args(
                         # "  requires {",
                         # "    feature: 'coverage'",
                         # "  }")));
-# TODO: note requires
-
 #-------------------------------------------------------------------------------
 
 ## Features from `getFeaturesToAppearLastInFeaturesList`:
@@ -1698,17 +1858,17 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1388-L1403
 cc_feature(
     name = "fully_static_link",
-    feature_name = "fully_static_link",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:fully_static_link",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:fully_static_link",
     enabled = False,
     args = [":fully_static_link_args"],
 )
 cc_args(
     name = "fully_static_link_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":link_executable_actions",
+        "@rules_cc//cc/toolchains/actions:with_deps_dynamic_library_link_actions",
+    ],
+    args = ["-static"],
 )
 
         # featureBuilder.add(
@@ -1730,17 +1890,16 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1404-L1428
 cc_feature(
     name = "user_compile_flags",
-    feature_name = "user_compile_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:user_compile_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:user_compile_flags",
     enabled = True,
     args = [":user_compile_flags_args"],
 )
 cc_args(
     name = "user_compile_flags_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_compile_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:user_compile_flags",
+    iterate_over = "@rules_cc//cc/toolchains/variables:user_compile_flags",
+    args = [format_arg("%s")],
 )
 
 
@@ -1771,17 +1930,21 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1429-L1456
 cc_feature(
     name = "sysroot",
-    feature_name = "sysroot",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:sysroot",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:sysroot",
     enabled = True,
     args = [":sysroot_args"],
 )
 cc_args(
     name = "sysroot_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":all_link_actions",
+        ":preprocessor_compile_actions",
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:sysroot",
+    args = [format_arg(
+        "--sysroot=%s", "@rules_cc//cc/toolchains/variables:sysroot",
+    )],
 )
 
 
@@ -1817,17 +1980,16 @@ include paths first.
 ''' # TODO: is ordering preserved here?
 cc_feature(
     name = "unfiltered_compile_flags",
-    feature_name = "unfiltered_compile_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:unfiltered_compile_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:unfiltered_compile_flags",
     enabled = True,
     args = [":unfiltered_compile_flags_args"],
 )
 cc_args(
     name = "unfiltered_compile_flags_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [":all_compile_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:unfiltered_compile_flags",
+    iterate_over = "@rules_cc//cc/toolchains/variables:unfiltered_compile_flags",
+    args = [format_arg("%s")],
 )
 
 
@@ -1854,17 +2016,20 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1486-L1512
 cc_feature(
     name = "linker_param_file",
-    feature_name = "linker_param_file",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:linker_param_file",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:linker_param_file",
     enabled = False,
     args = [":linker_param_file_args"],
 )
 cc_args(
     name = "linker_param_file_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        ":all_link_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_link_static_library",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:linker_param_file",
+    args = [format_arg(
+        "@%s", "@rules_cc//cc/toolchains/variables:linker_param_file",
+    )],
 )
 # NOTE: divergence; not using a separate flag set for `c++-link-static-library`
 # (the flag is the same at this point...)
@@ -1898,17 +2063,21 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1513-L1538
 cc_feature(
     name = "compiler_input_flags",
-    feature_name = "compiler_input_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:compiler_input_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:compiler_input_flags",
     enabled = True,
     args = [":compiler_input_flags_args"],
 )
 cc_args(
     name = "compiler_input_flags_args",
-    actions = [],
-    requires_not_none = "",
-    args = [],
-    # TODO
+    actions = [
+        # NOTE: divergence from upstream; we include `clif_match`
+        ":all_compile_actions",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:source_file",
+    args = [
+        "-c",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:source_file"),
+    ],
 )
 
 
@@ -1936,14 +2105,16 @@ cc_args(
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1540-L1573
 cc_feature(
     name = "compiler_output_flags",
-    feature_name = "compiler_output_flags",
-    overrides = "@rules_cc//cc/toolchain/features/legacy:compiler_output_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:compiler_output_flags",
     enabled = True,
     args = [":compiler_output_flags_args"],
 )
 cc_args(
     name = "compiler_output_flags_args",
-    actions = [], # TODO
+    actions = [
+        # NOTE: divergence from upstream; we include `clif_match`
+        ":all_compile_actions",
+    ],
     nested = [
         ":compiler_output_flags_assembly_file_args",
         ":compiler_output_flags_preprocess_file_args",
@@ -1952,18 +2123,21 @@ cc_args(
 )
 cc_nested_args(
     name = "compiler_output_flags_assembly_file_args",
-    requires_not_none = "", # TODO,
-    args = [], # TODO
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_assembly_file",
+    args = ["-S"],
 )
 cc_nested_args(
     name = "compiler_output_flags_preprocess_file_args",
-    requires_not_none = "", # TODO,
-    args = [], # TODO
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_preprocess_file",
+    args = ["-E"],
 )
 cc_nested_args(
     name = "compiler_output_flags_output_file_args",
-    requires_not_none = "", # TODO,
-    args = [], # TODO
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_file",
+    args = [
+        "-o",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file"),
+    ],
 )
 
                         # "  name: 'compiler_output_flags'",

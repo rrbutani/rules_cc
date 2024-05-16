@@ -13,12 +13,24 @@
 # limitations under the License.
 """Helper functions for working with args."""
 
+load("@bazel_skylib//lib:structs.bzl", "structs")
 load(":variables.bzl", "get_type")
 
 visibility([
     "//cc/toolchains",
     "//tests/rule_based_toolchain/...",
 ])
+
+# NOTE: we want to apply `iterate_over` *after* unwrapping and processing all
+# the requirements imposed by the `requires_*` attributes — this is,
+# semantically, how Bazel interprets the `expand_if_*` fields that these
+# attributes lower to:
+# https://github.com/bazelbuild/bazel/blob/b91b2f540bf22f0e20be899464bdcc8205ba947e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainFeatures.java#L371-L428
+REQUIREMENT_ORDERING = struct(
+    before_option_unwrap = 0,
+    after_option_unwrap = 1,
+    after_iterate = 2,
+)
 
 def get_action_type(args_list, action_type):
     """Returns the corresponding entry in ArgsListInfo.by_action.
@@ -61,33 +73,15 @@ def validate_nested_args(*, nested_args, variables, actions, label, fail = fail)
             # Make sure we don't keep using the same object.
             overrides = dict(**overrides)
 
-        if nested_args.iterate_over != None:
-            type = get_type(
-                name = nested_args.iterate_over,
-                variables = variables,
-                overrides = overrides,
-                actions = actions,
-                args_label = label,
-                nested_label = nested_args.label,
-                fail = fail,
-            )
-            if type["name"] == "list":
-                # Rewrite the type of the thing we iterate over from a List[T]
-                # to a T.
-                overrides[nested_args.iterate_over] = type["elements"]
-            elif type["name"] == "option" and type["elements"]["name"] == "list":
-                # Rewrite Option[List[T]] to T.
-                overrides[nested_args.iterate_over] = type["elements"]["elements"]
-            else:
-                fail("Attempting to iterate over %s, but it was not a list - it was a %s" % (nested_args.iterate_over, type["repr"]))
-
-        # 1) Validate variables marked with after_option_unwrap = False.
+        # 1) Validate variables marked with ordering = before_option_unwrap.
         # 2) Unwrap Option[T] to T as required.
-        # 3) Validate variables marked with after_option_unwrap = True.
-        for after_option_unwrap in [False, True]:
+        # 3) Validate variables marked with ordering = after_option_unwrap.
+        # 4) Rewrite List[T] to T as directed by `iterate_over`.
+        # 5) Validate variables marked with ordering = after_iterate.
+        for ord in sorted(structs.to_dict(REQUIREMENT_ORDERING).values()):
             for var_name, requirements in nested_args.requires_types.items():
                 for requirement in requirements:
-                    if requirement.after_option_unwrap == after_option_unwrap:
+                    if requirement.ordering == ord:
                         type = get_type(
                             name = var_name,
                             variables = variables,
@@ -104,8 +98,8 @@ def validate_nested_args(*, nested_args, variables, actions, label, fail = fail)
                                 type = type["repr"],
                             ))
 
-            # Only unwrap the options after the first iteration of this loop.
-            if not after_option_unwrap:
+            # Unwrap the options after the first iteration of this loop.
+            if ord == (REQUIREMENT_ORDERING.after_option_unwrap - 1):
                 for var in nested_args.unwrap_options:
                     type = get_type(
                         name = var,
@@ -118,6 +112,27 @@ def validate_nested_args(*, nested_args, variables, actions, label, fail = fail)
                     )
                     if type["name"] == "option":
                         overrides[var] = type["elements"]
+
+            # Rewrite `List[T]` as `T` after the second iteration:
+            if ord == (REQUIREMENT_ORDERING.after_iterate - 1) and nested_args.iterate_over != None:
+                type = get_type(
+                    name = nested_args.iterate_over,
+                    variables = variables,
+                    overrides = overrides,
+                    actions = actions,
+                    args_label = label,
+                    nested_label = nested_args.label,
+                    fail = fail,
+                )
+                if type["name"] == "list":
+                    # Rewrite the type of the thing we iterate over from a List[T]
+                    # to a T.
+                    overrides[nested_args.iterate_over] = type["elements"]
+                elif type["name"] == "option" and type["elements"]["name"] == "list":
+                    # Rewrite Option[List[T]] to T.
+                    overrides[nested_args.iterate_over] = type["elements"]["elements"]
+                else:
+                    fail("Attempting to iterate over %s, but it was not a list - it was a %s" % (nested_args.iterate_over, type["repr"]))
 
         for child in nested_args.nested:
             stack.append((child, overrides))

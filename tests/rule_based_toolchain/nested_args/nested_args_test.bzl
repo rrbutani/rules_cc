@@ -16,6 +16,7 @@
 load("//cc:cc_toolchain_config_lib.bzl", "flag_group", "variable_with_value")
 load("//cc/toolchains:cc_toolchain_info.bzl", "VariableInfo")
 load("//cc/toolchains:format.bzl", "format_arg")
+load("//cc/toolchains/impl:nested_args.bzl", "REQUIREMENT_ORDERING")
 load(
     "//cc/toolchains/impl:nested_args.bzl",
     "FORMAT_ARGS_ERR",
@@ -144,7 +145,7 @@ def _requires_types_test(env, targets):
         {"var": [struct(
             msg = REQUIRES_NONE_ERR,
             valid_types = ["option"],
-            after_option_unwrap = False,
+            ordering = REQUIREMENT_ORDERING.before_option_unwrap,
         )]},
     )
 
@@ -162,7 +163,7 @@ def _requires_types_test(env, targets):
         {"foo": [struct(
             msg = FORMAT_ARGS_ERR,
             valid_types = ["string", "file", "directory"],
-            after_option_unwrap = True,
+            ordering = REQUIREMENT_ORDERING.after_iterate,
         )]},
     )
 
@@ -178,12 +179,12 @@ def _requires_types_test(env, targets):
             struct(
                 msg = REQUIRES_EQUAL_ERR,
                 valid_types = ["string"],
-                after_option_unwrap = True,
+                ordering = REQUIREMENT_ORDERING.after_option_unwrap,
             ),
             struct(
                 msg = FORMAT_ARGS_ERR,
                 valid_types = ["string", "file", "directory"],
-                after_option_unwrap = True,
+                ordering = REQUIREMENT_ORDERING.after_iterate,
             ),
         ]},
     )
