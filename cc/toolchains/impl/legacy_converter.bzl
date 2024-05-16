@@ -137,13 +137,13 @@ def convert_tool(tool):
     )
 
 def _convert_action_type_config(atc):
-    implies = sorted([ft.name for ft in atc.implies.to_list()])
+    implies = ([ft.name for ft in atc.implies.to_list()]) # NOTE: don't sort! ... TODO: does the order of the feature declarations matter then? or just this order?
     if atc.args:
         implies.append("implied_by_%s" % atc.action_type.name)
 
     return legacy_action_config(
         action_name = atc.action_type.name,
-        enabled = True, # TODO: should this be `False`? See: https://github.com/bazelbuild/bazel/blob/cc335fd27e3f8b5a57f98328a67e874d28f4d558/src/main/protobuf/crosstool_config.proto#L312
+        enabled = False, # TODO: should this be `False`? See: https://github.com/bazelbuild/bazel/blob/cc335fd27e3f8b5a57f98328a67e874d28f4d558/src/main/protobuf/crosstool_config.proto#L312
         tools = [convert_tool(tool) for tool in atc.tools],
         implies = implies,
     )
@@ -195,6 +195,7 @@ def convert_toolchain(toolchain):
 
     return struct(
         # TODO: sorting features is bad, actually! order of the features affects order of expanded arguments
-        features = sorted([ft for ft in features if ft != None], key = lambda ft: ft.name),
+        # features = sorted([ft for ft in features if ft != None], key = lambda ft: ft.name),
+        features = [ft for ft in features if ft != None],
         action_configs = sorted(action_configs, key = lambda ac: ac.action_name),
     )

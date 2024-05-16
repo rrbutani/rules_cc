@@ -37,6 +37,8 @@ cc_toolchain(
     toolchain_features = [
         # ":no_legacy_features",
         # TODO: we'd need to define all the features to use ^...
+
+        "//legacy_feature_defs",
     ],
     target_system_name = "",
     target_cpu = "",

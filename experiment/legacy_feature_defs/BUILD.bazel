@@ -676,6 +676,8 @@ cc_args(
     actions = [
         "@rules_cc//cc/toolchains/actions:cpp_link_executable",
     ],
+    # NOTE: divergence: upstream uses `expand_if_true` (requires_true) instead
+    # of `expand_if_all_available` (requires_not_none) here...
     requires_not_none = "@rules_cc//cc/toolchains/variables:propeller_optimize_ld_path",
     args = [
         format_arg(
@@ -753,6 +755,7 @@ cc_feature(
 cc_args(
     name = "build_interface_libraries_args",
     actions = [":dynamic_library_link_actions"],
+    requires_any_of = ["@rules_cc//cc/toolchains/features/legacy:supports_interface_shared_libraries"],
     requires_not_none = "@rules_cc//cc/toolchains/variables:generate_interface_library",
     args = [
         # For context about these args see:

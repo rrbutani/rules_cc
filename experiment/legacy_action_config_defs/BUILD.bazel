@@ -397,6 +397,7 @@ cc_action_type_config(
 cc_args(
     name = "strip_arg_output",
     actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_file",
     args = [
         "-S",
         "-o", format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file"),
@@ -417,6 +418,7 @@ cc_args(
 cc_args(
     name = "strip_arg_input",
     actions = ["@rules_cc//cc/toolchains/actions:strip"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_file",
     args = [format_arg("%s", "@rules_cc//cc/toolchains/variables:output_file")],
 )
 
