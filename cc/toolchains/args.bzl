@@ -121,3 +121,7 @@ Examples:
 )
 
 cc_args = lambda **kwargs: args_wrapper_macro(rule = _cc_args, **kwargs)
+
+
+# TODO: docs, tests
+

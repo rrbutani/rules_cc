@@ -144,7 +144,7 @@ def _var(target):
 
 # TODO: Consider replacing this with a subrule in the future. However, maybe not
 # for a long time, since it'll break compatibility with all bazel versions < 7.
-def nested_args_provider_from_ctx(ctx):
+def nested_args_provider_from_ctx(ctx, args_list = None):
     """Gets the nested args provider from a rule that has NESTED_ARGS_ATTRS.
 
     Args:
@@ -154,7 +154,7 @@ def nested_args_provider_from_ctx(ctx):
     """
     variables = collect_provider(ctx.attr.variables, VariableInfo)
     args = []
-    for arg in ctx.attr.args:
+    for arg in (args_list if args_list != None else ctx.attr.args):
         arg = json.decode(arg)
 
         # Rewrite `value` (if present) from an index to a Label:
@@ -272,6 +272,7 @@ def nested_args_provider(
         requires_false = None,
         requires_equal = None,
         requires_equal_value = "",
+        allow_empty = False,
         fail = fail):
     """Creates a validated NestedArgsInfo.
 

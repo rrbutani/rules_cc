@@ -5,155 +5,1608 @@
 # TODO: maybe move to a `config` subdir..
 
 load("@rules_cc//cc/toolchains:action_type_config.bzl", "cc_action_type_config")
-load("@rules_cc//cc/toolchains:actions.bzl", "cc_action_type", "cc_action_type_set")
-load("@rules_cc//cc/toolchains:args_list.bzl", "cc_args_list")
+load("@rules_cc//cc/toolchains:actions.bzl", "cc_action_type_set")
 load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
 load("@rules_cc//cc/toolchains:feature_constraint.bzl", "cc_feature_constraint")
 load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
+load("@rules_cc//cc/toolchains:feature_set.bzl", "cc_feature_set")
 load("@rules_cc//cc/toolchains:format.bzl", "format_arg")
-load("@rules_cc//cc/toolchains:mutually_exclusive_category.bzl", "cc_mutually_exclusive_category")
-load("@rules_cc//cc/toolchains:nested_args.bzl", "cc_nested_args")
+load("@rules_cc//cc/toolchains:nested_args.bzl", "cc_nested_args", "cc_nested_args_from_settings")
 load("@rules_cc//cc/toolchains:tool.bzl", "cc_tool")
 load("@rules_cc//cc/toolchains:toolchain.bzl", "cc_toolchain")
-# load(":defs.bzl", "print_cc_toolchain_config_info")
+
+load("@bazel_skylib//rules:common_settings.bzl", "string_list_setting", "bool_setting", "string_flag")
+
+load(":helpers.bzl", string_list_flag = "string_list_flag_repeatable")
+
+# TODO: is this right?
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L999
+LINUX = "//conditions:default"
+MACOS = "@platforms//os:macos"
 
 ################################################################################
 
 ## Knobs
+# See: https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1491-L1503
 
-        # "compile_flags": attr.string_list(),
-        # "dbg_compile_flags": attr.string_list(),
-        # "opt_compile_flags": attr.string_list(),
-        # "conly_flags": attr.string_list(),
-        # "cxx_flags": attr.string_list(),
-        # "link_flags": attr.string_list(),
-        # "archive_flags": attr.string_list(),
-        # "link_libs": attr.string_list(),
-        # "opt_link_flags": attr.string_list(),
-        # "unfiltered_compile_flags": attr.string_list(),
-        # "coverage_compile_flags": attr.string_list(),
-        # "coverage_link_flags": attr.string_list(),
-        # "supports_start_end_lib": attr.bool(),
+# NOTE: users of this machinery have more context about what's supported and
+# should provide values for these settings; the defaults are best-effort.
 
-        # is_clang?
+# NOTE: we have duplicate `_extra` flags for some attrs to allow for extending
+# the default flag list instead of overriding.
+
+# From: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L598-L617
+string_list_setting(
+    name = "compile_flags",
+    build_setting_default = [
+        "-fstack-protector",
+        # All warnings are enabled.
+        "-Wall",
+        # Enable a few more warnings that aren't part of -Wall:
+        "-Wthread-safety", # TODO: gate if unsupported?
+        "-Wself-assign", # TODO: gate if unsupported?
+        # Disable problematic warnings:
+        "-Wunused-but-set-parameter", # TODO: gate if unsupported?
+        # has false positives
+        "-Wno-free-nonheap-object", # TODO: gate if unsupported?
+        # Enable coloring even if there's no attached terminal. Bazel removes
+        # the escape sequences if --nocolor is specified.
+        "-fcolor-diagnostics",
+        # Keep stack frames for debugging, even in opt mode.
+        "-fno-omit-frame-pointer",
+    ],
+)
+string_list_flag(name = "extra_compile_flags", build_setting_default = [])
+
+# From: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L689
+string_list_setting(
+    name = "dbg_compile_flags",
+    build_setting_default = ["-g"],
+)
+string_list_flag(name = "extra_dbg_compile_flags", build_setting_default = [])
+
+# From: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L644-L669
+string_list_setting(
+    name = "opt_compile_flags",
+    build_setting_default = [
+        # No debug symbols.
+        # Maybe we should enable https://gcc.gnu.org/wiki/DebugFission for opt
+        # or even generally? However, that can't happen here, as it requires
+        # special handling in Bazel.
+        "-g0",
+
+        # Conservative choice for -O; -O3 can increase binary size and even slow
+        # down the resulting binaries. Profile first and / or use FDO if you
+        # need better performance than this.
+        "-O2",
+
+        # Security hardening on by default.
+        # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
+        "-D_FORTIFY_SOURCE=1",
+
+        # Disable assertions
+        "-DNDEBUG",
+
+        # Removal of unused code and data at link time (can this increase binary
+        # size in some cases?).
+        "-ffunction-sections",
+        "-fdata-sections",
+    ],
+)
+string_list_flag(name = "extra_opt_compile_flags", build_setting_default = [])
+
+string_list_flag(
+    name = "conly_flags",
+    build_setting_default = [
+        # TODO: `BAZEL_CONLYOPTS`: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L408-L413
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+
+        # TODO(empty-args-issue): remove, just a placeholder
+        "-U__ugh",
+    ]
+)
+
+string_list_flag(
+    name = "cxx_flags",
+    build_setting_default = [
+        # TODO: `BAZEL_CXXOPTS`: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L415-L420
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+
+        # TODO: `CPLUS_INCLUDE_PATH`:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L97-L106
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L619
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+
+        # TODO(empty-args-issue): remove, just a placeholder
+        "-U___ugh",
+    ],
+)
+
+string_list_setting(
+    name = "link_flags",
+    build_setting_default = [
+        # TODO: `-fuse-ld` for `gold`/`lld`: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L437-L439
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+
+        # TODO: `-B` so that the compiler can find the linker:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L426-L443
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+
+        # TODO: `-Wl,-no-as-needed`, if supported:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L621-L622
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+        "-Wl,-no-as-needed",
+
+        # TODO: `-z relro`, `-z now` if supported:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L623-L629
+        "-Wl,-z,relro,-z,now",
+    ] +
+    # NOTE: not configurable! ☹️
+    # select({
+    #     # https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L630-L636
+    #     "@platforms//os:macos": ["-headerpad_max_install_names"],
+    #     "//conditions:default": [
+    #         # TODO: gate on gold?
+    #         # "-Wl,--warn-execstack",
+    #         # TODO: I don't think `lld` has this?
+    #         #  - https://discourse.llvm.org/t/rfc-odr-checker-for-clang-and-lld/45148/37
+    #         #  - https://maskray.me/blog/2022-11-13-odr-violation-detection
+    #         # "-Wl,--detect-odr-violations",
+    #     ],
+    # }) +
+    [
+        # TODO: `-pass-exit-codes` (gcc only?)
+
+        # TODO: `BAZEL_LINKOPTS`
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L483-L488
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+    ],
+)
+
+string_list_flag(name = "archive_flags", build_setting_default = [
+    # TODO(empty-args-issue): remove; here so this is non-empty (need to fix..)
+    "--plugin=/dev/null", # no-op w/llvm-ar
+])
+
+string_list_flag(
+    name = "link_libs",
+    build_setting_default = [
+        # TODO: `-Wl,-no-as-needed` and `-Wl,--push-state` on default libs:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L444-L458
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L444-L473
+        # NOTE: we're "hard coding" default libs to `libc++` and `libm` here...
+        #
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+        "-Wl,--push-state,-as-needed", "-lc++", "-Wl,--pop-state",
+        "-Wl,--push-state,-as-needed", "-lm", "-Wl,--pop-state",
+
+        # TODO: allow overriding with `BAZEL_LINKLIBS`:
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L483-L488
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+    ],
+)
+
+# https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L670-L678
+string_list_flag(
+    name = "opt_link_flags",
+    build_setting_default = [
+        # TODO: `-dead_strip` on macOS, check if `--gc-sections` is supported?
+        #  - https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L670-L678
+        # should be handled by the next level up (i.e. unix_cc_configure equiv)
+        "-Wl,--gc-sections",
+    ],
+)
+
+# https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L679-L688
+string_list_flag(
+    name = "unfiltered_compile_flags_list",
+    build_setting_default = [
+        # Make C++ compilation deterministic. Use linkstamping instead of these
+        # compiler symbols.
+        "-Wno-builtin-macro-redefined",
+        '-D__DATE__=\\"redacted\\"',
+        '-D__TIMESTAMP__=\\"redacted\\"',
+        '-D__TIME__=\\"redacted\\"',
+    ] +
+
+    # NOTE: not configurable! ☹️
+    # select({
+    #     # See: https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L219-L238
+    #     # https://github.com/llvm/llvm-project/issues/61699
+    #     ":is_gcc": ["-fno-canonical-system-headers"],
+    #     ":is_clang": ["-no-canonical-prefixes"],
+    # })
+    ["-no-canonical-prefixes"],
+)
+
+# NOTE: could/should just enable the
+# `llvm_coverage_map_format`/`gcc_coverage_map_format` features..
+
+# https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L252-L267
+string_list_flag(
+    name = "coverage_compile_flags",
+
+    # NOTE: not configurable! ☹️
+    # build_setting_default = select({
+    #     # TODO: gate on `BAZEL_USE_LLVM_NATIVE_COVERAGE`
+    #     # should be handled by the next level up (i.e. unix_cc_configure equiv)
+    #     ":is_clang": ["-fprofile-instr-generate",  "-fcoverage-mapping"],
+    #     ":is_gcc": ["--coverage"],
+    # }),
+    build_setting_default = ["-fprofile-instr-generate",  "-fcoverage-mapping"],
+)
+
+# https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L252-L267
+string_list_flag(
+    name = "coverage_link_flags",
+
+    # NOTE: not configurable ☹️
+    # build_setting_default = select({
+    #     # TODO: gate on `BAZEL_USE_LLVM_NATIVE_COVERAGE`
+    #     # should be handled by the next level up (i.e. unix_cc_configure equiv)
+    #     ":is_clang": ["-fprofile-instr-generate"],
+    #     ":is_gcc": ["--coverage"],
+    # }),
+    build_setting_default = ["-fprofile-instr-generate"],
+)
+
+# https://github.com/bazelbuild/bazel/blob/2bfe045ff2d6550e443625128b0dfeb2941ebfbc/tools/cpp/unix_cc_configure.bzl#L692
+bool_setting(
+    name = "supports_start_end_lib_knob",
+    # TODO: should be handled by the next level up (i.e. unix_cc_configure equiv)
+    build_setting_default = True,
+)
+config_setting(name = "start_end_lib_supported", flag_values = {"supports_start_end_lib_knob": "True"})
+
+string_flag(
+    name = "compiler_kind",
+    values = ["gcc", "clang"],
+    build_setting_default = "clang",
+)
+config_setting(name = "is_clang", flag_values = {":compiler_kind": "clang"})
+config_setting(name = "is_gcc", flag_values = {":compiler_kind": "gcc"})
+
+string_flag(
+    name = "archiver_kind",
+    values = ["ar", "libtool"],
+    build_setting_default = "ar",
+)
+config_setting(name = "using_ar", flag_values = {":archiver_kind": "ar"})
+config_setting(name = "using_libtool", flag_values = {":archiver_kind": "libtool"})
+
+label_flag(name = "llvm_cov_tool_path", build_setting_default = ":todo")
+label_flag(name = "objcopy_tool_path", build_setting_default = ":todo")
 
 ################################################################################
 
 ## Action Groups:
 
 # https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L99
-alias(
-    name = "all_compile_actions",
-    actual = "@rules_cc//tolchains/actions:compile_actions",
-)
+alias(name = "all_compile_actions", actual = "@rules_cc//cc/toolchains/actions:compile_actions")
+alias(name = "all_cpp_compile_actions", actual = "@rules_cc//cc/toolchains/actions:cpp_compile_actions")
+alias(name = "preprocessor_compile_actions", actual = "@rules_cc//cc/toolchains/actions:preprocessor_compile_actions")
+alias(name = "codegen_compile_actions", actual = "@rules_cc//cc/toolchains/actions:codegen_compile_actions")
 
-alias(
-    name = "all_cpp_compile_actions",
-    actual = "@rules_cc//tolchains/actions:cpp_compile_actions",
-)
-
-alias(
-    name = "preprocessor_compile_actions",
-    actual = "@rules_cc//tolchains/actions:preprocessor_compile_actions",
-)
-
-alias(
-    name = "codegen_compile_actions",
-    actual = "@rules_cc//tolchains/actions:codegen_compile_actions",
-)
-
-# NOTE: purposeful divergence from `unix_cc_toolchain_config`: this includes
-# `lto_index_actions`.
-alias(
-    name = "all_link_actions",
-    actual = "@rules_cc//tolchains/actions:all_link_actions",
-)
-
-alias(
-    name = "lto_index_actions",
-    actual = "@rules_cc//tolchains/actions:lto_index_actions",
-)
+# NOTE: this includes `lto_index_actions`.
+alias(name = "all_link_actions", actual = "@rules_cc//cc/toolchains/actions:link_actions")
+alias(name = "lto_index_actions", actual = "@rules_cc//cc/toolchains/actions:lto_index_actions")
 
 ################################################################################
 
 ## Args + Features:
 
-# NOTE: divergence: we include implied (legacy) features and action configs
-# explicitly...
+# See: https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L209-L1458
 
-# NOTE: preserve ordering when adding in implied legacy features!
-extra features (linux ordering):
-  - [missing legacy]: supports_interface_shared_libraries
-  - [missing legacy]: legacy_compile_flags # note: shuffled to front when legacy features are *not* disabled: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1311
-  - [same as legacy]: dependency_file
-  + serialized_diagnostics_file (not legacy!)
-  - [same as legacy]: random_seed
-  - [same as legacy]: pic
-  - [same as legacy]: per_object_debug_info
-  - [same as legacy]: preprocessor_defines
-  - [same as legacy]: includes
-  - [same as legacy]: include_paths # technically not the same; legacy has `framework_include_paths`... (should be okay)
-  + external_include_paths (not legacy!)
-  - [same as legacy]: fdo_instrument
-  - [same as legacy]: cs_fdo_instrument
-  - [same as legacy]: cs_fdo_optimize
-  + thin_lto (not legacy!)
-  - [same as legacy]: fdo_prefetch_hints
-  - [same as legacy]: autofdo
-  - [missing legacy]: propeller_optimize_thinlto_compile_actions
-  - [missing legacy]: propeller_optimize
-  - [missing legacy]: memprof_optimize
-  - [same as legacy]: build_interface_libraries
-  - [same as legacy]: dynamic_library_linker_tool
-  - [same as legacy]: shared_flag
-  - [same as legacy]: linkstamps
-  - [same as legacy]: output_execpath_flags
-  + runtime_library_search_directories (deivated from legacy!) # legacy uses `@loader_path` instead of `rpath` on macOS... unclear which is preferable
-  - [same as legacy]: library_search_directories
-  + libtool (not legacy! fully custom?) # only enabled on macOS
-  + archiver_flags (deviated from legacy!) # expresses the same intent as legacy but via a feature (libtool) instead of `ifLinux`/`ifMac`. I think this version is cleaner than legacy's. Also adds archive flags to `cpp_link_static_library`... can reuse some of the `cc_args`
-  - [same as legacy]: force_pic_flags # technically deviated: legacy uses `-Wl,-pie` instead of `-pie` on macOS but I think this is fine?
-  - [same as legacy]: fission_support
-  - [same as legacy]: strip_debug_symbols
-  + coverage (deviated from legacy!) # I think I like legacy's solution better though?
-  - [missing legacy] llvm_coverage_map_format
-  - [missing legacy] gcc_coverage_map_format
-  + supports_pic (not legacy!)
-  + asan (not legacy! fully custom?)
-  + tsan (not legacy! fully custom?)
-  + ubsan (not legacy! fully custom?)
-  - [same as legacy]: static_link_cpp_runtimes # note: reordered
-  + supports_start_end_lib (not legacy! OPT)
-  + default_compile_flags (not legacy!) # note: shuffled to front when legacy features are *not* disabled: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1321; # TODO: should we move to front?
-  + default_link_flags (not legacy! fully custom?)
-  - [same as legacy]: libraries_to_link # note: reordered; technically deviated: legacy uses `-force_load` on macOS... I think this is okay though
-  - [same as legacy]: user_link_flags # note: reordered
-  - [missing legacy]: legacy_link_flags
-  + default_link_libs (not legacy! fully custom?)
-  - [same as legacy]: static_libgcc # note: reordered
-  - [same as legcacy]: fdo_optimize # note: reordered; technically deviated: legacy has some `-Wno-profile-instr-{unprofiled,out-of-date}` flags that `unix_cc_toolchain_config.bzl` doesn't. I think this is fine; looks like the latter just wasn't synced (out of date)
-  + supports_dynamic_linker (not legacy! OPT)
-  + dbg (not legacy! OPT)
-  + opt (not legacy! OPT)
-  - [missing legacy] fully_static_link
-  - [same as legacy]: user_compile_flags
-  - [same as legacy]: sysroot
-  + unfiltered_compile_flags (deviated from legacy!) # legacy uses the `unfiltered_compile_flags` variable (which maybe doesn't exist?) and unix inlines the args from an attr...
-  + treat_warnings_as_errors (not legacy! fully custom?)
-  + archive_param_file (not legacy!)
-  + use_module_maps (not legacy! fully custom? if: clang)
-  + module_maps (not legacy! if: clang)
-  + layering_check (not legacy! if: clang)
-  - [missing legacy]: linker_param_file
-  - [missing legacy]: compiler_input_flags
-  - [missing legacy]: compiler_output_flags
+# `dependency_file`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
 
-# 24 features to implement here; 44 in legacy
-# 68 total...
+# `serialized_diagnostics_file` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1124-L1147
+cc_feature(
+    name = "serialized_diagnostics_file",
+    feature_name = "serialized_diagnostics_file",
+    enabled = False,
+    args = [":serialized_diagnostics_file_args"],
+)
+cc_args(
+    name = "serialized_diagnostics_file_args",
+    # NOTE: divergence; includes `module_codegen`
+    actions = [":all_compile_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:serialized_diagnostics_file",
+    args = [
+        "--serialize-diagnostics",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:serialized_diagnostics_file"),
+    ],
+)
 
-# TODO: different subset for macOS, different ordering; plus extras:
+    # serialized_diagnostics_file_feature = feature(
+    #     name = "serialized_diagnostics_file",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [
+    #                 ACTION_NAMES.assemble,
+    #                 ACTION_NAMES.preprocess_assemble,
+    #                 ACTION_NAMES.c_compile,
+    #                 ACTION_NAMES.cpp_compile,
+    #                 ACTION_NAMES.cpp_module_compile,
+    #                 ACTION_NAMES.objc_compile,
+    #                 ACTION_NAMES.objcpp_compile,
+    #                 ACTION_NAMES.cpp_header_parsing,
+    #                 ACTION_NAMES.clif_match,
+    #             ],
+    #             flag_groups = [
+    #                 flag_group(
+    #                     flags = ["--serialize-diagnostics", "%{serialized_diagnostics_file}"],
+    #                     expand_if_available = "serialized_diagnostics_file",
+    #                 ),
+    #             ],
+    #         ),
+    #     ],
+    # )
+
+# `random_seed`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_defs`)
+
+# `pic`'s definition in `unix_cc_toolchain_config` is identical to the built in
+# definition (replicated in `//legacy_feature_defs`)
+
+# `per_object_debug_info`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `preprocessor_defines`'s definition in `unix_cc_toolchain_config` is identical
+# to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `includes`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_defs`)
+
+# `include_paths`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_defs`)
+#
+# NOTE: technically not the same; legacy has `framework_include_paths` while
+# `unix_cc`'s doesn't; this should be okay though
+
+# `external_include_paths` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L768-L792
+cc_feature(
+    name = "external_include_paths",
+    feature_name = "external_include_paths",
+    enabled = False,
+    args = [":external_include_paths_args"],
+)
+cc_args(
+    name = "external_include_paths_args",
+    actions = [":preprocessor_compile_actions"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:external_include_paths",
+    iterate_over = "@rules_cc//cc/toolchains/variables:external_include_paths",
+    args = ["-isystem", format_arg("%s")],
+)
+
+    # external_include_paths_feature = feature(
+    #     name = "external_include_paths",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [
+    #                 ACTION_NAMES.preprocess_assemble,
+    #                 ACTION_NAMES.linkstamp_compile,
+    #                 ACTION_NAMES.c_compile,
+    #                 ACTION_NAMES.cpp_compile,
+    #                 ACTION_NAMES.cpp_header_parsing,
+    #                 ACTION_NAMES.cpp_module_compile,
+    #                 ACTION_NAMES.clif_match,
+    #                 ACTION_NAMES.objc_compile,
+    #                 ACTION_NAMES.objcpp_compile,
+    #             ],
+    #             flag_groups = [
+    #                 flag_group(
+    #                     flags = ["-isystem", "%{external_include_paths}"],
+    #                     iterate_over = "external_include_paths",
+    #                     expand_if_available = "external_include_paths",
+    #                 ),
+    #             ],
+    #         ),
+    #     ],
+    # )
+
+# `fdo_instrument`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `cs_fdo_instrument`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `cs_fdo_optimize`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `thin_lto` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1217-L1278
+#
+# For a good overview see: https://gist.github.com/MaskRay/24f4e2eed208b9d8b0a3752575a665d4#distributed-thinlto
+cc_feature(
+    name = "thin_lto",
+    feature_name = "thin_lto",
+    enabled = False,
+    args = [
+        ":thin_lto_compile_and_link_args",
+        ":thin_lto_linkstamp_args",
+        ":thin_lto_index_args",
+        ":thin_lto_backend_args",
+    ],
+)
+
+cc_args(
+    name = "thin_lto_compile_and_link_args",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        ":all_link_actions",
+    ],
+    args = [
+        ":thin_lto_compile_and_link_args_flto",
+        ":thin_lto_compile_and_link_args_indexing_bitcode_file",
+    ],
+)
+cc_nested_args(
+    name = "thin_lto_compile_and_link_args_flto",
+    args = ["-flto=thin"],
+)
+cc_nested_args(
+    name = "thin_lto_compile_and_link_args_indexing_bitcode_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:lto_indexing_bitcode_file",
+    args = [
+        "-Xclang",
+        format_arg(
+            "-fthin-link-bitcode=%s",
+            "@rules_cc//cc/toolchains/variables:lto_indexing_bitcode_file",
+        ),
+    ],
+)
+
+cc_args(
+    name = "thin_lto_linkstamp_args",
+    actions = ["@rules_cc//cc/toolchains/actions:linkstamp_compile"],
+    args = ["-DBUILD_LTO_TYPE=thin"],
+)
+
+cc_args(
+    name = "thin_lto_index_args",
+    actions = [":lto_index_actions"],
+    args = [
+        ":thin_lto_index_args_params_imports_prefix",
+        ":thin_lto_index_args_suffix",
+        ":thin_lto_index_args_merged_object_file",
+    ],
+)
+cc_nested_args(
+    name = "thin_lto_index_args_params_imports_prefix",
+    args = [
+        "-flto=thin",
+        # NOTE: lack of an `=` here is intentional:
+        # https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/LinkBuildVariables.java#L177-L178
+        format_arg(
+            "-Wl,-plugin-opt,thinlto-index-only%s",
+            "@rules_cc//cc/toolchains/variables:thinlto_optional_params_file",
+        ),
+        "-Wl,-plugin-opt,thinlto-emit-imports-files",
+        format_arg(
+            "-Wl,-plugin-opt,thinlto-prefix-replace=%s",
+            "@rules_cc//cc/toolchains/variables:thinlto_prefix_replace",
+        ),
+    ],
+)
+cc_nested_args(
+    name = "thin_lto_index_args_suffix",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:thinlto_object_suffix_replace",
+    args = [
+        format_arg(
+            "-Wl-plugin-opt,thinlto-object-suffix-replace=%s",
+            "@rules_cc//cc/toolchains/variables:thinlto_object_suffix_replace",
+        ),
+    ],
+)
+cc_nested_args(
+    name = "thin_lto_index_args_merged_object_file",
+    requires_not_none = "@rules_cc//cc/toolchains/variables:thinlto_merged_object_file",
+    args = [
+        format_arg(
+            "-Wl,-plugin-opt,obj-path=%s",
+            "@rules_cc//cc/toolchains/variables:thinlto_merged_object_file",
+        )
+    ],
+)
+
+cc_args(
+    name = "thin_lto_backend_args",
+    actions = ["@rules_cc//cc/toolchains/actions:lto_backend"],
+    args = [
+        "-c", format_arg("-fthinlto-index=%s", "@rules_cc//cc/toolchains/variables:thinlto_index"),
+        "-o", format_arg("%s", "@rules_cc//cc/toolchains/variables:thinlto_output_object_file"),
+        "-x", "ir",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:thinlto_input_bitcode_file"),
+    ],
+)
+
+    # thinlto_feature = feature(
+    #     name = "thin_lto",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [
+    #                 ACTION_NAMES.c_compile,
+    #                 ACTION_NAMES.cpp_compile,
+    #             ] + all_link_actions + lto_index_actions,
+    #             flag_groups = [
+    #                 flag_group(flags = ["-flto=thin"]),
+    #                 flag_group(
+    #                     expand_if_available = "lto_indexing_bitcode_file",
+    #                     flags = [
+    #                         "-Xclang",
+    #                         "-fthin-link-bitcode=%{lto_indexing_bitcode_file}",
+    #                     ],
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.linkstamp_compile],
+    #             flag_groups = [flag_group(flags = ["-DBUILD_LTO_TYPE=thin"])],
+    #         ),
+    #         flag_set(
+    #             actions = lto_index_actions,
+    #             flag_groups = [
+    #                 flag_group(flags = [
+    #                     "-flto=thin",
+    #                     "-Wl,-plugin-opt,thinlto-index-only%{thinlto_optional_params_file}",
+    #                     "-Wl,-plugin-opt,thinlto-emit-imports-files",
+    #                     "-Wl,-plugin-opt,thinlto-prefix-replace=%{thinlto_prefix_replace}",
+    #                 ]),
+    #                 flag_group(
+    #                     expand_if_available = "thinlto_object_suffix_replace",
+    #                     flags = [
+    #                         "-Wl,-plugin-opt,thinlto-object-suffix-replace=%{thinlto_object_suffix_replace}",
+    #                     ],
+    #                 ),
+    #                 flag_group(
+    #                     expand_if_available = "thinlto_merged_object_file",
+    #                     flags = [
+    #                         "-Wl,-plugin-opt,obj-path=%{thinlto_merged_object_file}",
+    #                     ],
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.lto_backend],
+    #             flag_groups = [
+    #                 flag_group(flags = [
+    #                     "-c",
+    #                     "-fthinlto-index=%{thinlto_index}",
+    #                     "-o",
+    #                     "%{thinlto_output_object_file}",
+    #                     "-x",
+    #                     "ir",
+    #                     "%{thinlto_input_bitcode_file}",
+    #                 ]),
+    #             ],
+    #         ),
+    #     ],
+    # )
+
+# `fdo_prefetch_hints`'s definition in `unix_cc_toolchain_config` is identical
+# to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `autofdo`'s definition in `unix_cc_toolchain_config` is identical to the built
+# in definition (replicated in `//legacy_feature_defs`)
+
+# `build_interface_libraries`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `dynamic_library_linker_tool`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `shared_flag`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_defs`)
+
+# `linkstamps`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_defs`)
+
+# `output_execpath_flags`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `runtime_library_search_directories` is defined differently in `unix_cc`
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L548-L610
+#
+# NOTE: legacy uses `@loader_path` instead of `rpath` on macOS... unclear which
+# is preferable
+alias(name = "runtime_library_search_directories", actual = "//legacy_feature_defs:runtime_library_search_directories")
+# TODO(macos): actually impl this; just using the legacy definition for now ^
+
+    # runtime_library_search_directories_feature = feature(
+    #     name = "runtime_library_search_directories",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = [
+    #                 flag_group(
+    #                     iterate_over = "runtime_library_search_directories",
+    #                     flag_groups = [
+    #                         flag_group(
+    #                             flags = [
+    #                                 "-Xlinker",
+    #                                 "-rpath",
+    #                                 "-Xlinker",
+    #                                 "$EXEC_ORIGIN/%{runtime_library_search_directories}",
+    #                             ],
+    #                             expand_if_true = "is_cc_test",
+    #                         ),
+    #                         flag_group(
+    #                             flags = [
+    #                                 "-Xlinker",
+    #                                 "-rpath",
+    #                                 "-Xlinker",
+    #                                 "$ORIGIN/%{runtime_library_search_directories}",
+    #                             ],
+    #                             expand_if_false = "is_cc_test",
+    #                         ),
+    #                     ],
+    #                     expand_if_available =
+    #                         "runtime_library_search_directories",
+    #                 ),
+    #             ],
+    #             with_features = [
+    #                 with_feature_set(features = ["static_link_cpp_runtimes"]),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = [
+    #                 flag_group(
+    #                     iterate_over = "runtime_library_search_directories",
+    #                     flag_groups = [
+    #                         flag_group(
+    #                             flags = [
+    #                                 "-Xlinker",
+    #                                 "-rpath",
+    #                                 "-Xlinker",
+    #                                 "$ORIGIN/%{runtime_library_search_directories}",
+    #                             ],
+    #                         ),
+    #                     ],
+    #                     expand_if_available =
+    #                         "runtime_library_search_directories",
+    #                 ),
+    #             ],
+    #             with_features = [
+    #                 with_feature_set(
+    #                     not_features = ["static_link_cpp_runtimes"],
+    #                 ),
+    #             ],
+    #         ),
+    #     ],
+    # )
+
+
+# `library_search_directories`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `libtool` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L999-L1003
+cc_feature(
+    name = "libtool",
+    feature_name = "libtool",
+    args = [],
+    enabled = select({
+        ":using_ar": False,
+        ":using_libtool": True,
+    })
+)
+cc_feature_constraint(
+    name = "not_libtool",
+    none_of = [":libtool"],
+)
+
+# `archiver_flags` is defined differently in `unix_cc`
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1005-L1078
+#
+# NOTE: `unix_cc`'s impl expresses the same intent as legacy but via a feature
+# (libtool) instead of `ifLinux`/`ifMac`. I think this version is cleaner than
+# legacy's. Also adds archive flags to `cpp_link_static_library`... can reuse
+# some of the `cc_args`.
+cc_feature(
+    name = "archiver_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:archiver_flags",
+    enabled = False,
+    args = [
+        ":archiver_flags_options_ar",
+        ":archiver_flags_options_libtool",
+        "//legacy_feature_defs:archiver_flags_source_args",
+        ":archiver_flags_custom_args"
+    ],
+)
+
+# See: https://man7.org/linux/man-pages/man1/ar.1.html
+#
+# `D` ("Operate in _deterministic_ mode") is used on Linux, not on macOS.
+cc_args(
+    name = "archiver_flags_options_ar",
+    actions = ["@rules_cc//cc/toolchains/actions:cpp_link_static_library"],
+    requires_any_of = [":not_libtool"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_execpath",
+    nested = select({
+        LINUX: [":archiver_flags_options_ar_linux"],
+        MACOS: [":archiver_flags_options_ar_macos"],
+    }) + [
+        ":archiver_flags_options_ar_output",
+    ],
+)
+cc_nested_args(name = "archiver_flags_options_ar_linux", args = ["rcsD"])
+cc_nested_args(name = "archiver_flags_options_ar_macos", args = ["rcs"])
+cc_nested_args(
+    name = "archiver_flags_options_ar_output",
+    args = [format_arg("%s", "@rules_cc//cc/toolchains/variables:output_execpath")],
+)
+
+# See: https://www.linux.org/docs/man1/libtool.html
+cc_args(
+    name = "archiver_flags_options_libtool",
+    actions = ["@rules_cc//cc/toolchains/actions:cpp_link_static_library"],
+    requires_any_of = [":libtool"],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:output_execpath",
+    args = [
+        "-static",
+        "-o",
+        format_arg("%s", "@rules_cc//cc/toolchains/variables:output_execpath"),
+    ],
+)
+
+cc_args(
+    name = "archiver_flags_custom_args",
+    actions = ["@rules_cc//cc/toolchains/actions:cpp_link_static_library"],
+    nested = [":archiver_flags_custom_args_inner"],
+)
+cc_nested_args_from_settings(
+    name = "archiver_flags_custom_args_inner",
+    settings = [":archive_flags"],
+)
+
+    # archiver_flags_feature = feature(
+    #     name = "archiver_flags",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [ACTION_NAMES.cpp_link_static_library],
+    #             flag_groups = [
+    #                 flag_group(
+    #                     flags = [
+    #                         "rcsD" if is_linux else "rcs",
+    #                         "%{output_execpath}",
+    #                     ],
+    #                     expand_if_available = "output_execpath",
+    #                 ),
+    #             ],
+    #             with_features = [
+    #                 with_feature_set(
+    #                     not_features = ["libtool"],
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.cpp_link_static_library],
+    #             flag_groups = [
+    #                 flag_group(
+    #                     flags = [
+    #                         "-static",
+    #                         "-o",
+    #                         "%{output_execpath}",
+    #                     ],
+    #                     expand_if_available = "output_execpath",
+    #                 ),
+    #             ],
+    #             with_features = [
+    #                 with_feature_set(
+    #                     features = ["libtool"],
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.cpp_link_static_library],
+    #             flag_groups = [
+    #                 flag_group(
+    #                     iterate_over = "libraries_to_link",
+    #                     flag_groups = [
+    #                         flag_group(
+    #                             flags = ["%{libraries_to_link.name}"],
+    #                             expand_if_equal = variable_with_value(
+    #                                 name = "libraries_to_link.type",
+    #                                 value = "object_file",
+    #                             ),
+    #                         ),
+    #                         flag_group(
+    #                             flags = ["%{libraries_to_link.object_files}"],
+    #                             iterate_over = "libraries_to_link.object_files",
+    #                             expand_if_equal = variable_with_value(
+    #                                 name = "libraries_to_link.type",
+    #                                 value = "object_file_group",
+    #                             ),
+    #                         ),
+    #                     ],
+    #                     expand_if_available = "libraries_to_link",
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.cpp_link_static_library],
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.archive_flags,
+    #                 ),
+    #             ] if ctx.attr.archive_flags else []),
+    #         ),
+    #     ],
+    # )
+
+# `force_pic_flags`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+#
+# NOTE: technically deviated: legacy uses `-Wl,-pie` instead of `-pie` on macOS
+# but I think this is fine?
+
+# `fission_support`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `strip_debug_symbols`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `coverage` is defined differently in `unix_cc`
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1189-L1215
+#
+# I think I like legacy's solution better though? (i.e.
+# `llvm_coverage_map_format` and `gcc_coverage_map_format` features).
+cc_feature(
+    name = "coverage",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:coverage",
+    enabled = False,
+    mutually_exclusive = ["//legacy_feature_defs:profile"],
+    args = [
+        ":coverage_compile_args",
+        ":coverage_link_args",
+    ],
+)
+cc_args(
+    name = "coverage_compile_args",
+    actions = [
+        # TODO: where does this action list come from? why `header_parsing`?
+        "@rules_cc//cc/toolchains/actions:preprocess_assemble",
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    nested = [":coverage_compile_args_inner"],
+)
+cc_nested_args_from_settings(name = "coverage_compile_args_inner", settings = [":coverage_compile_flags"])
+cc_args(
+    name = "coverage_link_args",
+    actions = [":all_link_actions"],
+    nested = [":coverage_link_args_inner"],
+)
+cc_nested_args_from_settings(name = "coverage_link_args_inner", settings = [":coverage_link_flags"])
+
+    # # Note that we also set --coverage for c++-link-nodeps-dynamic-library. The
+    # # generated code contains references to gcov symbols, and the dynamic linker
+    # # can't resolve them unless the library is linked against gcov.
+    # coverage_feature = feature( # NOTE: this deviates from `CppActionConfigs.java`; TODO: is this broken? `unix_cc_configure.bzl` doesn't specify it, `toolchains_llvm` does (and uses the same values that are in `llvm_coverage_map_format`)
+    #     name = "coverage",
+    #     provides = ["profile"],
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [
+    #                 ACTION_NAMES.preprocess_assemble,
+    #                 ACTION_NAMES.c_compile,
+    #                 ACTION_NAMES.cpp_compile,
+    #                 ACTION_NAMES.cpp_header_parsing,
+    #                 ACTION_NAMES.cpp_module_compile,
+    #             ],
+    #             flag_groups = ([
+    #                 flag_group(flags = ctx.attr.coverage_compile_flags),
+    #             ] if ctx.attr.coverage_compile_flags else []),
+    #         ),
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = ([
+    #                 flag_group(flags = ctx.attr.coverage_link_flags),
+    #             ] if ctx.attr.coverage_link_flags else []),
+    #         ),
+    #     ],
+    # )
+
+# `supports_pic` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L209-L212
+cc_feature(
+    name = "supports_pic",
+    overrides = "@rules_cc//cc/toolchains/features:supports_pic",
+    enabled = True,
+    args = [],
+)
+
+# `asan` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1301-L1310
+cc_feature(
+    name = "asan",
+    feature_name = "asan",
+    enabled = False,
+    args = [
+        ":asan_compile_args",
+        ":asan_link_args",
+    ],
+)
+cc_args(
+    name = "asan_compile_args",
+    actions = [":all_compile_actions"],
+    # requires_any_of = [":asan"], # TODO: cycle
+    args = [
+        "-fno-omit-frame-pointer",
+        "-fno-sanitize-recover=all",
+        "-fsanitize=address",
+        "-fno-common",
+    ],
+)
+cc_args(
+    name = "asan_link_args",
+    # NOTE: divergence: we're including LTO link actions here.
+    actions = [":all_link_actions"],
+    # requires_any_of = [":asan"], # TODO: cycle
+    args = [
+        "-fsanitize=address",
+    ]
+)
+
+    # asan_feature = _sanitizer_feature(
+    #     name = "asan",
+    #     specific_compile_flags = [
+    #         "-fsanitize=address",
+    #         "-fno-common",
+    #     ],
+    #     specific_link_flags = [
+    #         "-fsanitize=address",
+    #     ],
+    # )
+
+    # def _sanitizer_feature(name = "", specific_compile_flags = [], specific_link_flags = []):
+    #     return feature(
+    #         name = name,
+    #         flag_sets = [
+    #             flag_set(
+    #                 actions = all_compile_actions,
+    #                 flag_groups = [
+    #                     flag_group(flags = [
+    #                         "-fno-omit-frame-pointer",
+    #                         "-fno-sanitize-recover=all",
+    #                     ] + specific_compile_flags),
+    #                 ],
+    #                 with_features = [
+    #                     with_feature_set(features = [name]),
+    #                 ],
+    #             ),
+    #             flag_set(
+    #                 actions = all_link_actions,
+    #                 flag_groups = [
+    #                     flag_group(flags = specific_link_flags),
+    #                 ],
+    #                 with_features = [
+    #                     with_feature_set(features = [name]),
+    #                 ],
+    #             ),
+    #         ],
+    #     )
+
+# `tsan` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1312-L1320
+cc_feature(
+    name = "tsan",
+    feature_name = "tsan",
+    enabled = False,
+    args = [
+        ":tsan_compile_args",
+        ":tsan_link_args",
+    ],
+)
+cc_args(
+    name = "tsan_compile_args",
+    actions = [":all_compile_actions"],
+    # requires_any_of = [":tsan"], # TODO: cycle
+    args = [
+        "-fno-omit-frame-pointer",
+        "-fno-sanitize-recover=all",
+        "-fsanitize=thread",
+    ],
+)
+cc_args(
+    name = "tsan_link_args",
+    # NOTE: divergence: we're including LTO link actions here.
+    actions = [":all_link_actions"],
+    # requires_any_of = [":tsan"], # TODO: cycle
+    args = [
+        "-fsanitize=thread",
+    ]
+)
+
+    # tsan_feature = _sanitizer_feature(
+    #     name = "tsan",
+    #     specific_compile_flags = [
+    #         "-fsanitize=thread",
+    #     ],
+    #     specific_link_flags = [
+    #         "-fsanitize=thread",
+    #     ],
+    # )
+
+
+# `ubsan` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1322-L1330
+cc_feature(
+    name = "ubsan",
+    feature_name = "ubsan",
+    enabled = False,
+    args = [
+        ":ubsan_compile_args",
+        ":ubsan_link_args",
+    ],
+)
+cc_args(
+    name = "ubsan_compile_args",
+    actions = [":all_compile_actions"],
+    # requires_any_of = [":ubsan"], # TODO: cycle
+    args = [
+        "-fno-omit-frame-pointer",
+        "-fno-sanitize-recover=all",
+        "-fsanitize=undefined",
+    ],
+)
+cc_args(
+    name = "ubsan_link_args",
+    # NOTE: divergence: we're including LTO link actions here.
+    actions = [":all_link_actions"],
+    # requires_any_of = [":ubsan"], # TODO: cycle
+    args = [
+        "-fsanitize=undefined",
+    ]
+)
+
+    # ubsan_feature = _sanitizer_feature(
+    #     name = "ubsan",
+    #     specific_compile_flags = [
+    #         "-fsanitize=undefined",
+    #     ],
+    #     specific_link_flags = [
+    #         "-fsanitize=undefined",
+    #     ],
+    # )
+
+
+# `static_link_cpp_runtimes`'s definition in `unix_cc_toolchain_config` is
+# identical to the built in definition (replicated in `//legacy_feature_defs`)
+
+# `supports_start_end_lib` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L213-L216
+cc_feature(
+    name = "supports_start_end_lib",
+    overrides = "@rules_cc//cc/toolchains/features:supports_start_end_lib",
+    enabled = select({
+        ":start_end_lib_supported": True,
+        "//conditions:default": False,
+    }),
+    args = [],
+)
+
+# `default_compile_flags` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L223-L285
+cc_feature(
+    name = "default_compile_flags",
+    feature_name = "default_compile_flags",
+    enabled = True,
+    args = [
+        ":default_compile_flags_hardening_disable",
+        ":default_compile_flags_user_compile_flags",
+        ":default_compile_flags_dbg_compile_flags",
+        ":default_compile_flags_opt_compile_flags",
+        ":default_compile_flags_c_only_compile_flags",
+        ":default_compile_flags_cxx_compile_flags",
+    ],
+)
+
+cc_args(
+    name = "default_compile_flags_hardening_disable",
+    actions = [":all_compile_actions"],
+    args = [
+        # Security hardening requires optimization.
+        # We need to undef it as some distributions now have it enabled by
+        # default.
+        # TODO: I think this is a bad default? `unix_cc_configure.bzl` undoes
+        # this anyways...
+        "-U_FORTIFY_SOURCE"
+    ],
+    requires_any_of = [":not_thin_lto"],
+)
+cc_feature_constraint(name = "not_thin_lto", none_of = [":thin_lto"])
+
+cc_args(
+    name = "default_compile_flags_user_compile_flags",
+    actions = [":all_compile_actions"],
+    nested = [":compile_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "compile_flags_as_args", settings = [":compile_flags", ":extra_compile_flags"])
+
+cc_args(
+    name = "default_compile_flags_dbg_compile_flags",
+    actions = [":all_compile_actions"],
+    requires_any_of = [":dbg"],
+    nested = [":dbg_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "dbg_flags_as_args", settings = [":dbg_compile_flags", ":extra_dbg_compile_flags"])
+
+cc_args(
+    name = "default_compile_flags_opt_compile_flags",
+    actions = [":all_compile_actions"],
+    requires_any_of = [":opt"],
+    nested = [":opt_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "opt_flags_as_args", settings = [":opt_compile_flags", ":extra_opt_compile_flags"])
+
+cc_args(
+    name = "default_compile_flags_c_only_compile_flags",
+    actions = ["@rules_cc//cc/toolchains/actions:c_compile"],
+    nested = [":c_only_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "c_only_flags_as_args", settings = [":conly_flags"])
+
+cc_args(
+    name = "default_compile_flags_cxx_compile_flags",
+    actions = [
+        ":all_cpp_compile_actions",
+        "@rules_cc//cc/toolchains/actions:lto_backend",
+    ],
+    nested = [":cxx_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "cxx_flags_as_args", settings = [":cxx_flags"])
+
+    # default_compile_flags_feature = feature(
+    #     name = "default_compile_flags",
+    #     enabled = True,
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = all_compile_actions,
+    #             flag_groups = [
+    #                 flag_group(
+    #                     # Security hardening requires optimization.
+    #                     # We need to undef it as some distributions now have it enabled by default.
+    #                     flags = ["-U_FORTIFY_SOURCE"],
+    #                 ),
+    #             ],
+    #             with_features = [
+    #                 with_feature_set(
+    #                     not_features = ["thin_lto"],
+    #                 ),
+    #             ],
+    #         ),
+    #         flag_set(
+    #             actions = all_compile_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.compile_flags,
+    #                 ),
+    #             ] if ctx.attr.compile_flags else []),
+    #         ),
+    #         flag_set(
+    #             actions = all_compile_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.dbg_compile_flags,
+    #                 ),
+    #             ] if ctx.attr.dbg_compile_flags else []),
+    #             with_features = [with_feature_set(features = ["dbg"])],
+    #         ),
+    #         flag_set(
+    #             actions = all_compile_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.opt_compile_flags,
+    #                 ),
+    #             ] if ctx.attr.opt_compile_flags else []),
+    #             with_features = [with_feature_set(features = ["opt"])],
+    #         ),
+    #         flag_set(
+    #             actions = [ACTION_NAMES.c_compile],
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.conly_flags,
+    #                 ),
+    #             ] if ctx.attr.conly_flags else []),
+    #         ),
+    #         flag_set(
+    #             actions = all_cpp_compile_actions + [ACTION_NAMES.lto_backend],
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.cxx_flags,
+    #                 ),
+    #             ] if ctx.attr.cxx_flags else []),
+    #         ),
+    #     ],
+    # )
+
+# `default_link_flags` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L287-L321
+cc_feature(
+    name = "default_link_flags",
+    feature_name = "default_link_flags",
+    enabled = True,
+    args = [
+        ":default_link_flags_regular_args",
+        ":default_link_flags_opt_args",
+        ":default_link_flags_env",
+    ],
+)
+cc_args(
+    name = "default_link_flags_regular_args",
+    actions = [":all_link_actions"],
+    nested = [":link_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "link_flags_as_args", settings = [":link_flags"])
+cc_args(
+    name = "default_link_flags_opt_args",
+    actions = [":all_link_actions"],
+    requires_any_of = [":opt"],
+    nested = [":opt_link_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "opt_link_flags_as_args", settings = [":opt_link_flags"])
+cc_args(
+    name = "default_link_flags_env",
+    actions = [
+        ":all_link_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_link_static_library",
+    ],
+    env = {
+        # Required for hermetic links on macOS:
+        "ZERO_AR_DATE": "1",
+    },
+)
+
+
+    # default_link_flags_feature = feature(
+    #     name = "default_link_flags",
+    #     enabled = True,
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.link_flags,
+    #                 ),
+    #             ] if ctx.attr.link_flags else []),
+    #         ),
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.opt_link_flags,
+    #                 ),
+    #             ] if ctx.attr.opt_link_flags else []),
+    #             with_features = [with_feature_set(features = ["opt"])],
+    #         ),
+    #     ],
+    #     env_sets = [
+    #         env_set(
+    #             actions = all_link_actions + lto_index_actions + [ACTION_NAMES.cpp_link_static_library],
+    #             env_entries = ([
+    #                 env_entry(
+    #                     # Required for hermetic links on macOS
+    #                     key = "ZERO_AR_DATE",
+    #                     value = "1",
+    #                 ),
+    #             ]),
+    #         ),
+    #     ],
+    # )
+
+
+# `libraries_to_link`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+#
+# NOTE: technically deviated: legacy uses `-force_load` on macOS... I think this
+# is okay though
+
+# `user_link_flags`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `default_link_libs` is not a legacy feature
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L950-L959
+cc_feature(
+    name = "default_link_libs",
+    feature_name = "default_link_libs",
+    enabled = True,
+    args = [":default_link_libs_args"],
+)
+cc_args(
+    name = "default_link_libs_args",
+    actions = [":all_link_actions"],
+    nested = [":default_link_libs_args_from_list"],
+)
+cc_nested_args_from_settings(
+    name = "default_link_libs_args_from_list",
+    settings = [":link_libs"],
+)
+
+    # default_link_libs_feature = feature(
+    #     name = "default_link_libs",
+    #     enabled = True,
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = all_link_actions + lto_index_actions,
+    #             flag_groups = [flag_group(flags = ctx.attr.link_libs)] if ctx.attr.link_libs else [],
+    #         ),
+    #     ],
+    # )
+
+
+# `static_libgcc`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `fdo_optimize`'s definition in `unix_cc_toolchain_config` is identical to the
+# built in definition (replicated in `//legacy_feature_def`)
+#
+# NOTE: technically deviated: legacy has some
+# `-Wno-profile-instr-{unprofiled,out-of-date}` flags that
+# `unix_cc_toolchain_config.bzl` doesn't. I think this is fine; looks like the
+# latter just wasn't synced (out of date)
+
+# `supports_dynamic_linker` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L372
+cc_feature(
+    name = "supports_dynamic_linker",
+    overrides = "@rules_cc//cc/toolchains/features:supports_dynamic_linker",
+    enabled = True,
+    args = [],
+)
+
+# `dbg` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L322-L323
+cc_feature(
+    name = "dbg",
+    overrides = "@rules_cc//cc/toolchains/features:dbg",
+    enabled = False,
+    args = [],
+)
+
+# `opt` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L325-L326
+cc_feature(
+    name = "opt",
+    overrides = "@rules_cc//cc/toolchains/features:opt",
+    enabled = False,
+    args = [],
+)
+
+# `user_compile_flags`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `sysroot`'s definition in `unix_cc_toolchain_config` is identical to
+# the built in definition (replicated in `//legacy_feature_defs`)
+
+# `unfiltered_compile_flags` is defined differently in `unix_cc`
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L391-L404
+#
+# NOTE: legacy uses the `unfiltered_compile_flags` variable (which maybe doesn't
+# exist?) and unix inlines the args from an attr
+cc_feature(
+    name = "unfiltered_compile_flags",
+    overrides = "@rules_cc//cc/toolchains/features/legacy:unfiltered_compile_flags",
+    enabled = True,
+    args = ["unfiltered_compile_flags_args"],
+)
+cc_args(
+    name = "unfiltered_compile_flags_args",
+    actions = [":all_compile_actions"],
+    nested = [":unfiltered_compile_flags_as_args"],
+)
+cc_nested_args_from_settings(name = "unfiltered_compile_flags_as_args", settings = [":unfiltered_compile_flags_list"])
+
+    # unfiltered_compile_flags_feature = feature(
+    #     name = "unfiltered_compile_flags",
+    #     enabled = True,
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = all_compile_actions,
+    #             flag_groups = ([
+    #                 flag_group(
+    #                     flags = ctx.attr.unfiltered_compile_flags,
+    #                 ),
+    #             ] if ctx.attr.unfiltered_compile_flags else []),
+    #         ),
+    #     ],
+    # )
+
+
+# `treat_warnings_as_errors` is not a legacy feature:
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1280-L1294
+cc_feature(
+    name = "treat_warnings_as_errors",
+    feature_name = "treat_warnings_as_errors",
+    enabled = False,
+    args = [
+        ":warnings_as_errors_compile_args",
+        ":warnings_as_errors_link_args",
+    ],
+)
+cc_args(
+    name = "warnings_as_errors_compile_args",
+    # NOTE: divergence; using all_compile_actions instead of just C/C++ compile.
+    actions = [":all_compile_actions"],
+    args = ["-Werror"],
+)
+cc_args(
+    name = "warnings_as_errors_link_args",
+    # NOTE: divergence; including LTO index actions here.
+    actions = [":all_link_actions"],
+    nested = select({
+        MACOS: [":wae_link_args_macos"],
+        LINUX: [":wae_link_args_linux"],
+    }),
+)
+cc_nested_args(name = "wae_link_args_macos", args = ["-Wl,-fatal_warnings"]) # note the underscore
+cc_nested_args(name = "wae_link_args_linux", args = ["-Wl,-fatal-warnings"])
+
+    # treat_warnings_as_errors_feature = feature(
+    #     name = "treat_warnings_as_errors",
+    #     flag_sets = [
+    #         flag_set(
+    #             actions = [ACTION_NAMES.c_compile, ACTION_NAMES.cpp_compile],
+    #             flag_groups = [flag_group(flags = ["-Werror"])],
+    #         ),
+    #         flag_set(
+    #             actions = all_link_actions,
+    #             flag_groups = [flag_group(
+    #                 flags = ["-Wl,-fatal-warnings"] if is_linux else ["-Wl,-fatal_warnings"],
+    #             )],
+    #         ),
+    #     ],
+    # )
+
+# `archive_param_file` is not a legacy feature
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1296-L1299
+cc_feature(
+    name = "archive_param_file",
+    feature_name = "archive_param_file",
+    enabled = True,
+    args = [],
+)
+
+    # archive_param_file_feature = feature(
+    #     name = "archive_param_file",
+    #     enabled = True,
+    # )
+
+# `use_module_maps` is not a legacy feature
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L43-L64
+cc_feature(
+    name = "use_module_maps",
+    feature_name = "use_module_maps",
+    enabled = False,
+    requires_any_of = [":module_maps"],
+    args = [":use_module_maps_args"],
+)
+cc_args(
+    name = "use_module_maps_args",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    requires_not_none = "@rules_cc//cc/toolchains/variables:module_name",
+    args = [
+        format_arg("-fmodule-name=%s", "@rules_cc//cc/toolchains/variables:module_name"),
+        format_arg("-fmodule-map-file=%s", "@rules_cc//cc/toolchains/variables:module_map_file"),
+    ],
+)
+
+        # feature(
+        #     name = "use_module_maps",
+        #     requires = [feature_set(features = ["module_maps"])],
+        #     flag_sets = [
+        #         flag_set(
+        #             actions = [
+        #                 ACTION_NAMES.c_compile,
+        #                 ACTION_NAMES.cpp_compile,
+        #                 ACTION_NAMES.cpp_header_parsing,
+        #                 ACTION_NAMES.cpp_module_compile,
+        #             ],
+        #             flag_groups = [
+        #                 flag_group(
+        #                     flags = [
+        #                         "-fmodule-name=%{module_name}",
+        #                         "-fmodule-map-file=%{module_map_file}",
+        #                     ],
+        #                 ),
+        #             ],
+        #         ),
+        #     ],
+        # ),
+
+# `module_maps` is not a legacy feature
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L66-L70
+'''
+Tell blaze we support module maps in general, so they will be generated for all
+c/c++ rules.
+
+Note: not all C++ rules support module maps; thus, do not imply this feature
+from other features - instead, require it.
+'''
+cc_feature(name = "module_maps", feature_name = "module_maps", enabled = True, args = [])
+
+# `layering_check` is not a legacy feature
+# https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L71-L96
+cc_feature(
+    name = "layering_check",
+    feature_name = "layering_check",
+    enabled = False,
+    implies = [":use_module_maps"],
+    args = [":layering_check_args"],
+)
+cc_args(
+    name = "layering_check_args",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:c_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_compile",
+        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
+    ],
+    nested = [
+        ":layering_check_args_flags",
+        ":layering_check_args_dep_mod_map_files",
+    ],
+)
+cc_nested_args(
+    name = "layering_check_args_flags",
+    args = [
+        "-fmodules-strict-decluse",
+        "-Wprivate-header",
+    ],
+)
+cc_nested_args(
+    name = "layering_check_args_dep_mod_map_files",
+    iterate_over = "@rules_cc//cc/toolchains/variables:dependent_module_map_files",
+    args = [format_arg("-fmodule-map-file=%s")],
+)
+
+        # feature(
+        #     name = "layering_check",
+        #     implies = ["use_module_maps"],
+        #     flag_sets = [
+        #         flag_set(
+        #             actions = [
+        #                 ACTION_NAMES.c_compile,
+        #                 ACTION_NAMES.cpp_compile,
+        #                 ACTION_NAMES.cpp_header_parsing,
+        #                 ACTION_NAMES.cpp_module_compile,
+        #             ],
+        #             flag_groups = [
+        #                 flag_group(flags = [
+        #                     "-fmodules-strict-decluse",
+        #                     "-Wprivate-header",
+        #                 ]),
+        #                 flag_group(
+        #                     iterate_over = "dependent_module_map_files",
+        #                     flags = [
+        #                         "-fmodule-map-file=%{dependent_module_map_files}",
+        #                     ],
+        #                 ),
+        #             ],
+        #         ),
+        #     ],
+        # ),
+
+#-------------------------------------------------------------------------------
+
+## macOS specific features:
+
 #   - macos_minimum_os
+#     + https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1332-L1343
 #   - macos_default_link_flags
+#     + https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1345-L1360
 
 ################################################################################
 
@@ -161,22 +1614,130 @@ extra features (linux ordering):
 
 cc_tool(
     name = "llvm_cov_tool",
-    src = ":todo", data = [], requires_any_of = [],
+    src = ":llvm_cov_tool_path", data = [], requires_any_of = [],
 )
 cc_tool(
-    name = "objcopy",
-    src = ":todo", data = [], requires_any_of = [],
+    name = "objcopy_tool",
+    src = ":objcopy_tool_path", data = [], requires_any_of = [],
 )
 
-
-extra action configs:
-  - llvm cov
-  - objcopy
+cc_action_type_config(
+    name = "llvm_cov_action",
+    action_types = ["@rules_cc//cc/toolchains/actions:llvm_cov"],
+    tools = [":llvm_cov_tool"],
+)
+cc_action_type_config(
+    name = "objcopy_action",
+    action_types = ["@rules_cc//cc/toolchains/actions:objcopy_embed_data"],
+    tools = [":objcopy_tool"],
+)
 
 ################################################################################
 
-# Toolchain:
+# NOTE: divergence: we include implied (legacy) features and action configs
+# explicitly.
+
+## Features:
+cc_feature_set(
+    # NOTE: ordering comes from:
+    #  - `unix_cc_toolchain_config.bzl`: https://github.com/bazelbuild/bazel/blob/3d7c5ae47e2a02ccd81eb8024f22d56ae7811c9b/tools/cpp/unix_cc_toolchain_config.bzl#L1367-L1420
+    #  - legacy features: https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java
+    name = "linux_features",
+    all_of = [
+        "//legacy_feature_defs:supports_interface_shared_libraries",            # implied
+        "//legacy_feature_defs:legacy_compile_flags",                           # implied                                   # note: shuffled to front when legacy features are *not* disabled: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1311
+        "//legacy_feature_defs:dependency_file",                                # unix's impl is the same as legacy's
+        ":serialized_diagnostics_file",                                         # new feature (not legacy)
+        "//legacy_feature_defs:random_seed",                                    # unix's impl is the same as legacy's
+        "//legacy_feature_defs:pic",                                            # unix's impl is the same as legacy's
+        "//legacy_feature_defs:per_object_debug_info",                          # unix's impl is the same as legacy's
+        "//legacy_feature_defs:preprocessor_defines",                           # unix's impl is the same as legacy's
+        "//legacy_feature_defs:includes",                                       # unix's impl is the same as legacy's
+        "//legacy_feature_defs:include_paths",                                  # unix's impl is the same as legacy's*
+        ":external_include_paths",                                              # new feature (not legacy)
+        "//legacy_feature_defs:fdo_instrument",                                 # unix's impl is the same as legacy's
+        "//legacy_feature_defs:cs_fdo_instrument",                              # unix's impl is the same as legacy's
+        "//legacy_feature_defs:cs_fdo_optimize",                                # unix's impl is the same as legacy's
+        ":thin_lto",                                                            # new feature (not legacy)
+        "//legacy_feature_defs:fdo_prefetch_hints",                             # unix's impl is the same as legacy's
+        "//legacy_feature_defs:autofdo",                                        # unix's impl is the same as legacy's
+        "//legacy_feature_defs:propeller_optimize_thinlto_compile_actions",     # implied
+        "//legacy_feature_defs:propeller_optimize",                             # implied
+        "//legacy_feature_defs:memprof_optimize",                               # implied
+        "//legacy_feature_defs:build_interface_libraries",                      # unix's impl is the same as legacy's
+        "//legacy_feature_defs:dynamic_library_linker_tool",                    # unix's impl is the same as legacy's
+        "//legacy_feature_defs:shared_flag",                                    # unix's impl is the same as legacy's
+        "//legacy_feature_defs:linkstamps",                                     # unix's impl is the same as legacy's
+        "//legacy_feature_defs:output_execpath_flags",                          # unix's impl is the same as legacy's
+        ":runtime_library_search_directories",                                  # deviated from legacy
+        "//legacy_feature_defs:library_search_directories",                     # unix's impl is the same as legacy's
+        # ":libtool",                                                           # new feature (not legacy)                  # NOTE: should only enable on macOS
+        ":archiver_flags",                                                      # deviated from legacy
+        "//legacy_feature_defs:force_pic_flags",                                # unix's impl is the same as legacy's*
+        "//legacy_feature_defs:fission_support",                                # unix's impl is the same as legacy's
+        "//legacy_feature_defs:strip_debug_symbols",                            # unix's impl is the same as legacy's
+        ":coverage",                                                            # deviated from legacy
+        "//legacy_feature_defs:llvm_coverage_map_format",                       # implied
+        "//legacy_feature_defs:gcc_coverage_map_format",                        # implied
+        ":supports_pic",                                                        # new feature (not legacy)
+        ":asan",                                                                # new feature (not legacy)
+        ":tsan",                                                                # new feature (not legacy)
+        ":ubsan",                                                               # new feature (not legacy)
+        "//legacy_feature_defs:static_link_cpp_runtimes",                       # unix's impl is the same as legacy's       # note: reordered
+        ":supports_start_end_lib",                                              # new feature (not legacy)
+        ":default_compile_flags",                                               # new feature (not legacy)                  # note: shuffled to front when legacy features are *not* disabled: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcModule.java#L1321; # TODO: should we move to front?
+        ":default_link_flags",                                                  # new feature (not legacy)
+        "//legacy_feature_defs:libraries_to_link",                              # unix's impl is the same as legacy's*      # note: reordered
+        "//legacy_feature_defs:user_link_flags",                                # unix's impl is the same as legacy's       # note: reordered
+        "//legacy_feature_defs:legacy_link_flags",                              # implied
+        ":default_link_libs",                                                   # new feature (not legacy)
+        "//legacy_feature_defs:static_libgcc",                                  # unix's impl is the same as legacy's       # note: reordered
+        "//legacy_feature_defs:fdo_optimize",                                   # unix's impl is the same as legacy's*      # note: reordered
+        ":supports_dynamic_linker",                                             # new feature (not legacy)
+        ":dbg",                                                                 # new feature (not legacy)
+        ":opt",                                                                 # new feature (not legacy)
+        "//legacy_feature_defs:fully_static_link",                              # implied
+        "//legacy_feature_defs:user_compile_flags",                             # unix's impl is the same as legacy's
+        "//legacy_feature_defs:sysroot",                                        # unix's impl is the same as legacy's
+        ":unfiltered_compile_flags",                                            # deviated from legacy
+        ":treat_warnings_as_errors",                                            # new feature (not legacy)
+        ":archive_param_file",                                                  # new feature (not legacy)
+    ] + select({
+        ":is_clang": [
+            ":use_module_maps",                                                 # new feature (not legacy)                  # only enabled w/clang
+            ":module_maps",                                                     # new feature (not legacy)                  # only enabled w/clang
+            ":layering_check",                                                  # new feature (not legacy)                  # only enabled w/clang
+        ],
+        "//conditions:default": [],
+    }) + [
+        "//legacy_feature_defs:linker_param_file",                              # implied
+        "//legacy_feature_defs:compiler_input_flags",                           # implied
+        "//legacy_feature_defs:compiler_output_flags",                          # implied
+    ],
+)
+
+# TODO: different subset for macOS, different ordering; plus extras:
+#   - macos_minimum_os
+#   - macos_default_link_flags
+
+#-------------------------------------------------------------------------------
+
+## Action Configs:
+
+# extra action configs:
+#   - llvm cov
+#   - objcopy
+
+#-------------------------------------------------------------------------------
+
+## Toolchain:
+
 
 ################################################################################
 
 # TODO: https://github.com/bazelbuild/bazel/pull/21560/files#diff-ddde5af792a0d70f30a7a0c51224fdb5e6660f7306875143ac90794a6ce95981
+# TODO: https://github.com/bazelbuild/bazel/pull/16954
+#  - affects action_names, etc.
+# TODO: https://github.com/bazelbuild/bazel/pull/19940
+# TODO: https://github.com/bazelbuild/bazel/pull/22259
+

@@ -82,6 +82,7 @@ def convert_args(args):
                 legacy_env_entry(
                     key = key,
                     value = value,
+                    # TODO: support `expand_if_available`?
                 )
                 for key, value in args.env.items()
             ],
