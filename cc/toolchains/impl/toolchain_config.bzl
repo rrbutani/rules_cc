@@ -77,6 +77,7 @@ def _cc_toolchain_config_impl(ctx):
             ctx = ctx,
             action_configs = legacy.action_configs,
             features = legacy.features,
+            # TODO: artifact_name_patterns
             cxx_builtin_include_directories = ctx.attr.cxx_builtin_include_directories,
             # toolchain_identifier is deprecated, but setting it to None results
             # in an error that it expected a string, and for safety's sake, I'd
@@ -89,6 +90,7 @@ def _cc_toolchain_config_impl(ctx):
             abi_version = ctx.attr.abi_version,
             abi_libc_version = ctx.attr.abi_libc_version,
             builtin_sysroot = ctx.attr.sysroot or None,
+            # TODO: tool paths for make vars?
         ),
         # This allows us to support all_files.
         # If all_files was simply an alias to
@@ -116,9 +118,9 @@ cc_toolchain_config = rule(
         # TODO: Consider making this into a label_list that takes a
         #  cc_directory_marker rule as input.
         "cxx_builtin_include_directories": attr.string_list(),
-        "target_system_name": attr.string(mandatory = True),
-        "target_cpu": attr.string(mandatory = True),
-        "target_libc": attr.string(mandatory = True),
+        "target_system_name": attr.string(),
+        "target_cpu": attr.string(),
+        "target_libc": attr.string(),
         "compiler": attr.string(mandatory = True),
         "abi_version": attr.string(),
         "abi_libc_version": attr.string(),

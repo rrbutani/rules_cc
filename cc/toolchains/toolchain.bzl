@@ -26,29 +26,56 @@ visibility("public")
 # https://github.com/bazelbuild/bazel/blob/897edaa8ce4c0c4d570d3f279ee96d02604dc5fd/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainRule.java#L67-L106
 # TODO: This is best-effort. Update this with the correct file groups once we
 #  work out what actions correspond to what file groups.
+
+# https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/bazel/rules/cpp/BazelCppSemantics.java#L101-L105
+# - NOTE: falls back on all_files
+#   + TODO: would be nice to be able to append files for actions that don't
+#     don't have a group (i.e. llvm_cov? dwp?) to all_files
+#     * edit: you can do this by making ur own "action" and listing a tool
+#       for it; it'll get put into all_files
+#   + NOTE: some "actions" like dwp don't even have an action! their tool
+#     paths are just pulled from `tool_paths`...
+#     * they're called "tool-path only tools": https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/starlark/builtins_bzl/common/cc/cc_toolchain_provider_helper.bzl#L26-L31
+
 _LEGACY_FILE_GROUPS = {
+    # See: https://github.com/bazelbuild/bazel/blob/6d0c21081b92da498f4b7eff9e5c921f32a37c09/src/main/java/com/google/devtools/build/lib/rules/cpp/Link.java#L111-L187
+    #  - only entries with `LinkerOrArchiver.ARCHIVER`; see:
+    #    https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcLinkingHelper.java#L896-L900
     "ar_files": [
         "@rules_cc//cc/toolchains/actions:ar_actions",  # copybara-use-repo-external-label
     ],
+
+    # See: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/bazel/rules/cpp/BazelCppSemantics.java#L100-L105
+    #  - `getActionName`: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CppCompileActionBuilder.java#L176-L207
+    #
+    # Note that `preprocess_assemble` uses `compiler_files`.
     "as_files": [
-        "@rules_cc//cc/toolchains/actions:assembly_actions",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:assemble",  # copybara-use-repo-external-label
     ],
-    # https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/bazel/rules/cpp/BazelCppSemantics.java#L101-L105
-    # - NOTE: falls back on all_files
-    #   + TODO: would be nice to be able to append files for actions that don't
-    #     don't have a group (i.e. llvm_cov? dwp?) to all_files
-    #     * edit: you can do this by making ur own "action" and listing a tool
-    #       for it; it'll get put into all_files
-    #   + NOTE: some "actions" like dwp don't even have an action! their tool
-    #     paths are just pulled from `tool_paths`...
-    #     * they're called "tool-path only tools": https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/starlark/builtins_bzl/common/cc/cc_toolchain_provider_helper.bzl#L26-L31
+
+    # See: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/bazel/rules/cpp/BazelCppSemantics.java#L100-L105
+    #  - `getActionName`: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CppCompileActionBuilder.java#L176-L207
     "compiler_files": [
-        "@rules_cc//cc/toolchains/actions:cc_flags_make_variable",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:cpp_module_compile",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",  # copybara-use-repo-external-label
         "@rules_cc//cc/toolchains/actions:c_compile",  # copybara-use-repo-external-label
         "@rules_cc//cc/toolchains/actions:cpp_compile",  # copybara-use-repo-external-label
-        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:objc_compile",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:objcpp_compile",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:preprocess_assemble",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:clif_match",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:cpp_module_codegen",  # copybara-use-repo-external-label
+
+        # See: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CppLinkstampCompileHelper.java#L64-L97
+        #  - note: `setActionName` on `CppCompileActionBuilder` and then the
+        #    `finalizeCompileActionBuilder` call
+        "@rules_cc//cc/toolchains/actions:linkstamp_compile",  # copybara-use-repo-external-label
+
+        # See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/LtoBackendArtifacts.java#L259-L260
+        "@rules_cc//cc/toolchains/actions:lto_backend",  # copybara-use-repo-external-label
     ],
     # "compiler_files_without_includes" # google only
+
     # There are no actions listed for coverage, dwp, and objcopy in action_names.bzl.
     # TODO: `LLVM_COV`? no actions listed
     #
@@ -59,7 +86,16 @@ _LEGACY_FILE_GROUPS = {
     # possible to specify coverage files w/this machinery?
     #
     # could also maybe additionally associate the LLVM_COV action?
-    "coverage_files": [],
+
+    # NOTE: unused by actions but is propagated in `InstrumentedFilesInfo`:
+    #   - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainProvider.java#L314-L318
+    #   - https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/starlark/builtins_bzl/common/cc/cc_helper.bzl#L1116-L1126
+    #   - https://bazel.build/rules/lib/providers/InstrumentedFilesInfo.html
+    "coverage_files": [
+        # note: this action isn't actually used anywhere; this is just a
+        # convenient way to associate `data` with `coverage_files`.
+        "@rules_cc//cc/toolchains/actions:llvm_cov",  # copybara-use-repo-external-label
+    ],
 
     # TODO: no action associated with this... it's just invoked by tool path in
     # `cc_binary.bzl`:
@@ -74,26 +110,62 @@ _LEGACY_FILE_GROUPS = {
     #
     # TODO: we should add this to the list of `_TOOL_PATH_ONLY_TOOLS` in
     # `cc_toolchain_provider_helper.bzl`...
-    "dwp_files": [
 
+    # The `dwp` actions are pure starlark — there are no action names associated
+    # with them; see: https://github.com/bazelbuild/bazel/blob/ce9fa8eff5d4705c9f6bf6f6642fa9ed45eb0247/src/main/starlark/builtins_bzl/common/cc/cc_binary.bzl#L145-L146
+    "dwp_files": [
+        # we provide a placeholder action as a way to associate `data` with
+        # `dwp_files`:
+        "@rules_cc//cc/toolchains/actions:dwp",  # copybara-use-repo-external-label
     ],
 
+    # See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CppLinkActionBuilder.java#L175-L192
+    # See: https://github.com/bazelbuild/bazel/blob/6d0c21081b92da498f4b7eff9e5c921f32a37c09/src/main/java/com/google/devtools/build/lib/rules/cpp/Link.java#L111-L187
+    #  - only entries with `LinkerOrArchiver.LINKER`; see:
+    #    https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcLinkingHelper.java#L896-L900
     "linker_files": [
+        "@rules_cc//cc/toolchains/actions:lto_index_for_executable",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:lto_index_for_dynamic_library",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:lto_index_for_nodeps_dynamic_library",  # copybara-use-repo-external-label
+
+        "@rules_cc//cc/toolchains/actions:objc_executable",  # copybara-use-repo-external-label
         "@rules_cc//cc/toolchains/actions:cpp_link_dynamic_library",  # copybara-use-repo-external-label
         "@rules_cc//cc/toolchains/actions:cpp_link_nodeps_dynamic_library",  # copybara-use-repo-external-label
         "@rules_cc//cc/toolchains/actions:cpp_link_executable",  # copybara-use-repo-external-label
+
+        # Note: is never set as the `CppLinkAction`'s action name but features
+        # associated with this action can contribute to the command-line of
+        # `lto_index_*` `CppLinkAction` actions. So, we include it here.
+        #
+        # See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/LinkBuildVariables.java#L272-L283
+        "@rules_cc//cc/toolchains/actions:lto_indexing",  # copybara-use-repo-external-label
     ],
+
+    # Note: no usages in Bazel; seems to be internal.
     "objcopy_files": [
-        # TODO: objcopy_embed_data (non-goog)
+        "@rules_cc//cc/toolchains/actions:objcopy_embed_data",  # copybara-use-repo-external-label
+        "@rules_cc//cc/toolchains/actions:ld_embed_data",  # copybara-use-repo-external-label
     ],
+
+    # TODO: can't find any usages of `getStripFiles` or the `strip` action in
+    # Bazel; is this Blaze-specific?
+    #
+    # See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcToolchainProvider.java#L279-L282
     "strip_files": [
         "@rules_cc//cc/toolchains/actions:strip",  # copybara-use-repo-external-label
     ],
 }
+# Actions that aren't covered:
+#   - `cc_flags_make_variable`: never executed, just for associating features
+#     with make vars command lines
+#   - `cpp_header_analysis`: internal only?
 
-# TODO: we should set tool_paths? to keep make var usage from breaking?
+# TODO: we should set tool_paths? to:
+#  - keep make var usage from breaking
+#  - allow specifying paths for `_TOOL_PATH_ONLY_TOOLS`: llvm-profdata, llvm-cov, dwp, gcov, gcov-tool
 #
-# maybe make symlinks
+# maybe make symlinks to get around the "current package" restriction
+# would need to filter down to tools that don't have constraints...
 # downside is that this breaks tools like clang, maybe...
 #  - TODO: link to issue about this; this is why the wrapper script was created
 
@@ -105,6 +177,8 @@ _LEGACY_FILE_GROUPS = {
 #     + without it we have the usual limitations on tools
 #     + point to rules_cc's impl of modular cc toolchains as a motivation
 #       * we'd like to not need to set `tool_paths`
+#     + in particular, this would be nice for `dwp` and `llvm_cov`..
+#       * llvm-profdata, llvm-cov, dwp, gcov, gcov-tool: https://github.com/bazelbuild/bazel/blob/7fa7cd605ab5acd9db6cb0c19c4b6c9703c2eb7a/src/main/java/com/google/devtools/build/lib/rules/cpp/CppConfiguration.java#L66
 #  3. followup question: starlark exposed way of getting said action config
 #     tools?
 #     + right now make vars are broken in the presence of these...
@@ -184,6 +258,11 @@ _LEGACY_FILE_GROUPS = {
 #      instead of `T`) — this matches what Bazel does
 #  14. relax the mutually exclusive `requires_*` attribute restriction
 #  15. add `cc_nested_args_from_settings` (TODO: fix issue w/empty args)
+#  16. fix up action -> file group associations
+#  17. runfiles handling has many caveats (runfiles tree is not preserved)
+#      + should document these caveats? I don't think we can work around them
+#      + unless we want to go manually create files that mirror the structure of
+#        the runfiles tree and pass them along into the generated file groups..
 #
 #  ?. where to put unix_cc recreation using this stuff..
 #     - is there interest? should I clean it up and add test ensuring the proto
@@ -204,6 +283,8 @@ def cc_toolchain(
         compatible_with = None,
         tags = [],
         visibility = None,
+        extra_cc_toolchain_attrs = {}, # NOTE: point is to override hidden attrs
+        # TODO: allow overriding `cc_toolchain_config`
         **kwargs):
     """A macro that invokes native.cc_toolchain under the hood.
 
@@ -277,5 +358,7 @@ def cc_toolchain(
         static_runtime_lib = static_runtime_lib,
         supports_header_parsing = supports_header_parsing,
         supports_param_files = supports_param_files,
-        **(all_kwargs | legacy_file_groups)
+        # This is required for Bazel versions <= 7.x.x. It is ignored in later versions.
+        exec_transition_for_inputs = False,
+        **(all_kwargs | legacy_file_groups | extra_cc_toolchain_attrs),
     )

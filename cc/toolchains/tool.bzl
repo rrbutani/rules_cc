@@ -50,7 +50,7 @@ def _cc_tool_impl(ctx):
     return [
         tool,
         # This isn't required, but now we can do "bazel run <tool>", which can
-        # be very helpful when debugging toolchains.
+        # be very helpful when debugging toolchains. # NOTE: when the exec platform != target this is probably not appropriate?
         DefaultInfo(
             files = depset([link]),
             runfiles = runfiles,
@@ -64,7 +64,7 @@ cc_tool = rule(
     attrs = {
         "src": attr.label(
             allow_files = True,
-            cfg = "exec",
+            cfg = "exec", # TODO: is this necessary? `cfg = "exec"` is specified on `action_type_config`
             mandatory = True,
             doc = """The underlying binary that this tool represents.
 

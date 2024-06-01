@@ -130,7 +130,7 @@ Action configs define three key things:
 
 Examples:
 
-    cc_action_config(
+    cc_action_type_config(
         name = "ar",
         action_types = ["@toolchain//actions:all_ar_actions"],
         implies = [
@@ -140,7 +140,7 @@ Examples:
         tools = [":ar_tool"],
     )
 
-    cc_action_config(
+    cc_action_type_config(
         name = "clang",
         action_types = [
             "@toolchain//actions:all_asm_actions",

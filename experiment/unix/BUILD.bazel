@@ -275,7 +275,12 @@ config_setting(name = "using_ar", flag_values = {":archiver_kind": "ar"})
 config_setting(name = "using_libtool", flag_values = {":archiver_kind": "libtool"})
 
 label_flag(name = "llvm_cov_tool_path", build_setting_default = ":todo")
+cc_tool(name = "llvm_cov_default_tool", src = ":llvm_cov_tool_path")
+label_flag(name = "llvm_cov_tool", build_setting_default = ":llvm_cov_default_tool")
+
 label_flag(name = "objcopy_tool_path", build_setting_default = ":todo")
+cc_tool(name = "objcopy_default_tool", src = ":objcopy_tool_path")
+label_flag(name = "objcopy_tool", build_setting_default = ":objcopy_default_tool")
 
 ################################################################################
 
@@ -1611,15 +1616,6 @@ cc_nested_args(
 ################################################################################
 
 ## Action Configs + Tools:
-
-cc_tool(
-    name = "llvm_cov_tool",
-    src = ":llvm_cov_tool_path", data = [], requires_any_of = [],
-)
-cc_tool(
-    name = "objcopy_tool",
-    src = ":objcopy_tool_path", data = [], requires_any_of = [],
-)
 
 cc_action_type_config(
     name = "llvm_cov_action",

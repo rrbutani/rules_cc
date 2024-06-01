@@ -1,0 +1,440 @@
+
+new_local_repository(
+    name = "llvm_bins_x86_64_linux",
+    path = "/persistent/home/rahul/dev/aadg/ryl-worktrees/b/llvm-rel/host-bins",
+    build_file_content = """
+
+package(default_visibility = ["//visibility:public"])
+
+## Precise:
+
+filegroup(
+    name = "clang-builtin-headers",
+    srcs = glob(["clang-include-dir/**"]),
+)
+
+filegroup(name = "clang", srcs = ["clang-18"])
+filegroup(name = "lld", srcs = ["lld"])
+filegroup(name = "ar", srcs = ["llvm-ar"])
+filegroup(name = "cov", srcs = ["llvm-cov"])
+filegroup(name = "dwp", srcs = ["llvm-dwp"])
+filegroup(name = "nm", srcs = ["llvm-nm"])
+filegroup(name = "objdump", srcs = ["llvm-objdump"])
+filegroup(name = "objcopy", srcs = ["llvm-objcopy"])
+filegroup(name = "profdata", srcs = ["llvm-profdata"])
+
+## Fuzzy:
+
+filegroup(
+    name = "clang-builtin-headers-dir",
+    srcs = ["clang-include-dir"],
+)
+
+# can't do anything fuzzy for binaries, no dir (also not worth it?)
+
+""",
+)
+
+new_local_repository(
+    name = "compiler_rt_x86_64_linux",
+    path = "/persistent/home/rahul/dev/aadg/ryl-worktrees/b/llvm-rel/compiler-rt",
+    build_file_content = """
+
+package(default_visibility = ["//visibility:public"])
+
+TRIPLE = "x86_64-unknown-linux-gnu"
+
+## Precise:
+
+filegroup(
+    name = "dynamic_libs",
+    srcs = [ "lib/" + TRIPLE + "/libclang_rt." + lib + ".so" for lib in [
+            "asan", "tsan", "dyndd", "hwasan", "hwasan_aliases", "memprof",
+            "scudo_standalone", "ubsan_minimal", "ubsan_standalone",
+            # "dyndd" # don't know where this is used?
+        ]
+    ],
+)
+
+filegroup(
+    name = "static_libs",
+    srcs = [ "lib/" + TRIPLE + "/libclang_rt." + lib for lib in [
+            "asan.a",
+            "asan_cxx.a",
+            "tsan.a",
+            "tsan_cxx.a",
+
+            # Seems like `.syms` files are needed for runtimes that are
+            # conditionally statically linked:
+            # https://github.com/llvm/llvm-project/blob/fa0a72b584a06fcf210a9667a344c1f87a2a081b/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1326-L1343
+            # https://github.com/llvm/llvm-project/blob/fa0a72b584a06fcf210a9667a344c1f87a2a081b/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1563-L1570
+            "asan.a.syms",
+            "asan_cxx.a.syms",
+            "dfsan.a.syms",
+            "hwasan.a.syms",
+            "hwasan_aliases.a.syms",
+            "hwasan_aliases_cxx.a.syms",
+            "hwasan_cxx.a.syms",
+            "memprof.a.syms",
+            "memprof_cxx.a.syms",
+            "msan.a.syms",
+            "msan_cxx.a.syms",
+            "tsan.a.syms",
+            "tsan_cxx.a.syms",
+            "ubsan_minimal.a.syms",
+            "ubsan_standalone.a.syms",
+            "ubsan_standalone_cxx.a.syms",
+
+            # Seems to be static only?
+            # https://github.com/llvm/llvm-project/blob/fa0a72b584a06fcf210a9667a344c1f87a2a081b/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1506-L1514
+            "cfi.a",
+            "cfi_diag.a",
+        ]
+    ],
+)
+
+filegroup(
+    name = "common_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + lib for lib in [
+            # C runtime and compiler builtins are always statically linked:
+            "clang_rt.crtbegin.o",
+            "clang_rt.crtend.o",
+            "libclang_rt.builtins.a",
+
+            # `-preinit.a`s are only needed when *not* linking dynamically it
+            # seems?
+            # https://github.com/llvm/llvm-project/blob/fa0a72b584a06fcf210a9667a344c1f87a2a081b/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1406-L1437
+            #
+            # NOTE: putting in `common` for now though
+            "libclang_rt.asan-preinit.a",
+            "libclang_rt.hwasan-preinit.a",
+            "libclang_rt.memprof-preinit.a",
+
+            # `asan_static.a` is needed for both static and dynamic:
+            # https://github.com/llvm/llvm-project/blob/fa0a72b584a06fcf210a9667a344c1f87a2a081b/clang/lib/Driver/ToolChains/CommonArgs.cpp#L1443-L1445
+            "libclang_rt.asan_static.a",
+
+
+            # some sanitizer runtimes are always statically linked:
+            "libclang_rt.dfsan.a",
+            "libclang_rt.lsan.a",
+
+            # TODO: finish sorting compiler-rt files into `static`!
+            "libclang_rt.dd.a",
+            # libclang_rt.dyndd.so
+            "libclang_rt.fuzzer.a",
+            "libclang_rt.fuzzer_interceptors.a",
+            "libclang_rt.fuzzer_no_main.a",
+            "libclang_rt.gwp_asan.a",
+            "libclang_rt.hwasan.a",
+            # "libclang_rt.hwasan.so",
+            "libclang_rt.hwasan_aliases.a",
+            # "libclang_rt.hwasan_aliases.so",
+            "libclang_rt.hwasan_aliases_cxx.a",
+            "libclang_rt.hwasan_cxx.a",
+            "libclang_rt.memprof.a",
+            # "libclang_rt.memprof.so",
+            "libclang_rt.memprof_cxx.a",
+            "libclang_rt.msan.a",
+            "libclang_rt.msan_cxx.a",
+            "libclang_rt.profile.a",
+            "libclang_rt.safestack.a",
+            "libclang_rt.scudo_standalone.a",
+            # "libclang_rt.scudo_standalone.so",
+            "libclang_rt.scudo_standalone_cxx.a",
+            "libclang_rt.stats.a",
+            "libclang_rt.stats_client.a",
+            "libclang_rt.ubsan_minimal.a",
+            # "libclang_rt.ubsan_minimal.so",
+            "libclang_rt.ubsan_standalone.a",
+            # "libclang_rt.ubsan_standalone.so",
+            "libclang_rt.ubsan_standalone_cxx.a",
+            "libclang_rt.xray-basic.a",
+            "libclang_rt.xray-fdr.a",
+            "libclang_rt.xray-profiling.a",
+            "libclang_rt.xray.a",
+            "liborc_rt.a",
+        ]
+    ] + [
+        "share/" + f for f in [
+            "asan_ignorelist.txt",
+            "dfsan_abilist.txt",
+            "msan_ignorelist.txt",
+            "cfi_ignorelist.txt",
+            "hwasan_ignorelist.txt",
+        ]
+    ],
+)
+
+filegroup(
+    name = "hdrs",
+    srcs = glob(["include/**"]),
+)
+
+## Fuzzy:
+
+filegroup(
+    name = "common_dirs",
+    srcs = [
+        "lib/" + TRIPLE,
+        "share",
+
+        # ignore `hdrs`... (fuzzer, orc, profile, sanitizer, xray)
+        #  - if we include we have to splat clang's include dir (it's big)
+    ],
+)
+
+filegroup(
+    name = "hdrs_dirs",
+    srcs = glob(["include/*"], exclude_directories = False),
+)
+
+""",
+)
+
+new_local_repository(
+    name = "libcxx_x86_64_linux",
+    path = "/persistent/home/rahul/dev/aadg/ryl-worktrees/b/llvm-rel/libcxx",
+    build_file_content = """
+
+package(default_visibility = ["//visibility:public"])
+
+TRIPLE = "x86_64-unknown-linux-gnu"
+
+## Precise:
+
+filegroup(
+    name = "dynamic_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + lib for lib in [
+            "libc++.so", "libc++.so.1", "libc++.so.1.0",
+            "libc++abi.so", "libc++abi.so.1", "libc++abi.so.1.0",
+        ]
+    ],
+)
+
+filegroup(
+    name = "static_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + lib for lib in [
+            "libc++.a", "libc++abi.a",
+        ]
+    ],
+)
+
+filegroup(
+    name = "common_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + "libc++experimental.a",
+    ],
+)
+
+filegroup(
+    name = "headers",
+    srcs = glob([
+        "include/c++/v1/**",
+        "include/{triple}/c++/v1/*".format(triple = TRIPLE),
+    ]),
+)
+
+## Fuzzy:
+
+# can't really do for libs; there's no convenient dir because we split
+# `libunwind` off..
+
+filegroup(
+    name = "headers_dir",
+    srcs = [
+        "include/c++/v1",
+        "include/{triple}/c++/v1".format(triple = TRIPLE),
+    ],
+)
+
+""",
+)
+
+new_local_repository(
+    name = "libunwind_x86_64_linux",
+    path = "/persistent/home/rahul/dev/aadg/ryl-worktrees/b/llvm-rel/libunwind",
+    build_file_content = """
+
+package(default_visibility = ["//visibility:public"])
+
+TRIPLE = "x86_64-unknown-linux-gnu"
+
+## Precise:
+
+filegroup(
+    name = "dynamic_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + lib
+        for lib in ["libunwind.so", "libunwind.so.1", "libunwind.so.1.0"]
+    ],
+)
+
+filegroup(
+    name = "static_libs",
+    srcs = [
+        "lib/" + TRIPLE + "/" + "libunwind.a",
+    ],
+)
+
+filegroup(
+    name = "headers",
+    srcs = [
+        "include/__libunwind_config.h",
+        "include/libunwind.h",
+        "include/libunwind.modulemap",
+        "include/mach-o/compact_unwind_encoding.h",
+        "include/mach-o/compact_unwind_encoding.modulemap",
+        "include/unwind_arm_ehabi.h",
+        "include/unwind.h",
+        "include/unwind_itanium.h",
+    ]
+)
+
+## Fuzzy:
+
+# can't really do; isn't a convenient directory for us to use for libs or
+# headers
+
+""",
+)
+
+new_local_repository(
+    name = "glibc_sysroot_x86_64_linux",
+    path = "/persistent/home/rahul/dev/aadg/ryl-worktrees/b/llvm-rel/glibc-sysroot",
+    build_file_content = """
+
+load("@//:defs.bzl", struct = "struct_ctor")
+
+package(default_visibility = ["//visibility:public"])
+
+GLIBC_VERSION = "2.39-3"
+glibc_major_minor_version = ".".join(GLIBC_VERSION.split("-")[0].split(".")[0:2])
+
+
+## Precise:
+
+filegroup(
+    name = "runtime_loader",
+    srcs = ["usr/lib/ld-linux-x86-64.so.2"],
+)
+
+filegroup(
+    name = "c_runtime_object_files",
+    srcs = [
+        "usr/lib/" + obj for obj in [
+            "crt1.o", "crti.o", "crtn.o", "gcrt1.o", "grcrt1.o", "Mcrt1.o",
+            "rcrt1.o", "Scrt1.o",
+        ]
+    ],
+)
+
+libs = struct(
+    # libraries that are available as static libs (.a) and dylibs (.so):
+    STATIC_AND_DYNAMIC = [
+        "anl",
+        "BrokenLocale",
+        "c",
+        "dl",
+        "m",
+        "mvec", # used by `libm`
+        "pthread",
+        "resolv",
+        "rt",
+        "util",
+    ],
+    # libraries that are only available as dynamic libs:
+    DYNAMIC_ONLY = [
+        "c_malloc_debug",
+        "memusage",
+
+        # "network services library"
+        #
+        # https://docs.oracle.com/cd/E88353_01/html/E37842/libnsl-3lib.html
+        "nsl",
+
+        # NSS (Name Service Switch) libs:
+        "nss_compat",
+        "nss_db",
+        "nss_dns",
+        "nss_files",
+        "nss_hesiod", # https://en.wikipedia.org/wiki/Hesiod_(name_service)
+
+        "pcprofile",
+
+        "thread_db",
+    ],
+    # libraries that are only available as static libs:
+    STATIC_ONLY = [
+        # a "debugging enabled" libc:
+        # https://sourceware.org/legacy-ml/newlib/2011/msg00647.html
+        #
+        # I think this is just empty (kept for legacy compat)
+        "g",
+
+        # libm.a is a linker script that points at this file:
+        "m-{}".format(glibc_major_minor_version),
+
+        # malloc check
+        "mcheck"
+    ],
+
+    # special static libraries required for dynamic linking
+    STATIC_LIBS_REQUIRED_FOR_DYNAMIC_LINKING = [
+        "c_nonshared", # required by `libc.so` (a linker script)
+    ],
+)
+
+filegroup(
+    name = "c_stdlib_static_libraries",
+    srcs = [
+        "usr/lib/lib{}.a".format(lib_name) for lib_name in (
+            libs.STATIC_AND_DYNAMIC + libs.STATIC_ONLY
+        )
+    ],
+)
+
+filegroup(
+    name = "c_stdlib_dynamic_libraries",
+    srcs = glob([
+        # We use a glob to catch `so.1`, `so.2`, etc. variants of libraries
+        # (sometimes `.so` is just a symlink to a versioned path).
+        "usr/lib/lib{}.so*".format(lib_name) for lib_name in (
+            libs.STATIC_AND_DYNAMIC + libs.DYNAMIC_ONLY
+        )
+    ]) + [
+        "usr/lib/lib{}.a".format(lib_name) for lib_name in (
+            libs.STATIC_LIBS_REQUIRED_FOR_DYNAMIC_LINKING
+        )
+    ],
+
+    # Extra stuff that's (possibly?) used at runtime by these libraries:
+    data = (
+        ["usr/lib/audit/sotruss-lib.so"] +
+        glob(["usr/lib/" + d for d in ["gconv/**", "getconf/*", "locale/**"]])
+    ),
+)
+
+## Fuzzy:
+
+filegroup(
+    name = "headers",
+    srcs = ["usr/include"],
+)
+
+filegroup(
+    name = "libs",
+    srcs = ["usr/lib"],
+)
+
+""",
+)
+
+# TODO: when generating these be sure to apply target constraints and use
+# `native_binary` and what not
+
+# TODO: need to test extra-prefix'd (i.e. files with more parent dirs like
+# `llvm-18.1.4/clang/dir/include/immintrin.h`)

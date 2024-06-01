@@ -1743,7 +1743,7 @@ cc_args(
     actions = [
         ":all_link_actions",
         "@rules_cc//cc/toolchains/actions:objc_executable",
-        "@rules_cc//cc/toolchains/actions:objcpp_executable",
+        # "@rules_cc//cc/toolchains/actions:objcpp_executable", # NOTE: seems like a mistake in Bazel
     ],
     args = ["-fprofile-instr-generate"],
 )
@@ -1818,7 +1818,7 @@ cc_args(
     actions = [
         ":all_link_actions",
         "@rules_cc//cc/toolchains/actions:objc_executable",
-        "@rules_cc//cc/toolchains/actions:objcpp_executable",
+        # "@rules_cc//cc/toolchains/actions:objcpp_executable", # NOTE: seems like a mistake in Bazel
     ],
     args = ["--coverage"],
 )

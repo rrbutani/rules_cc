@@ -139,6 +139,12 @@ def _collect_files_for_action_type(atc, features, args):
     # NOTE: because implied features must also be added to the top-level
     # `cc_toolchain_config` target, we don't have to worry about hoisting up
     # features from `atc.implies`.
+    #
+    # TODO: we're dropping the actual runfiles object in `atc.files`!
+    #  - files will have the files contained within but we lose `symlinks` and
+    #    `root_symlinks` and `empty_files` (and also the runfiles tree)
+    #  - unfortunately I don't know of a way to propagate the runfiles supplier
+    #    through the cc toolchain machinery; it only accepts lists of files
     transitive_files = [atc.files.files, get_action_type(args, atc.action_type).files]
     for ft in features:
         transitive_files.append(get_action_type(ft.args, atc.action_type).files)

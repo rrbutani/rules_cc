@@ -33,6 +33,10 @@ cc_action_type(
     action_name = ACTION_NAMES.linkstamp_compile,
 )
 
+# Seems to be a marker action that provides a way for features to be used when
+# generating flags for makevars usage.
+#
+# See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/CcCommon.java#L629-L657
 cc_action_type(
     name = "cc_flags_make_variable",
     action_name = ACTION_NAMES.cc_flags_make_variable,
@@ -43,6 +47,7 @@ cc_action_type(
     action_name = ACTION_NAMES.cpp_module_codegen,
 )
 
+# Google Internal?
 cc_action_type(
     name = "cpp_header_analysis",
     action_name = "c++-header-analysis",
@@ -73,6 +78,21 @@ cc_action_type(
     action_name = ACTION_NAMES.llvm_cov,
 )
 
+# NOTE: this is not an action name that's defined in Bazel; the DWP actions are,
+# at this point, pure starlark:
+#  - https://github.com/bazelbuild/bazel/blob/ce9fa8eff5d4705c9f6bf6f6642fa9ed45eb0247/src/main/starlark/builtins_bzl/common/cc/cc_binary.bzl#L47-L157
+#
+# This action type exists so that there's an easy way to associate `data` with
+# the `dwp` file group and so that there's a (roundabout) way to specify the
+# `dwp` tool path.
+cc_action_type(
+    name = "dwp",
+    action_name = "dwp",
+)
+
+# Seems to be a meta action type to allow for easily associating flags with
+# all of the `lto_index_*` actions?
+# See: https://github.com/bazelbuild/bazel/blob/2afbc92f5cc81e781664a9b4000b8d769b9d7e84/src/main/java/com/google/devtools/build/lib/rules/cpp/LinkBuildVariables.java#L272-L283
 cc_action_type(
     name = "lto_indexing",
     action_name = ACTION_NAMES.lto_indexing,
@@ -118,11 +138,13 @@ cc_action_type(
     action_name = ACTION_NAMES.cpp_link_static_library,
 )
 
+# NOTE: appears to be unused in Bazel.
 cc_action_type(
     name = "strip",
     action_name = ACTION_NAMES.strip,
 )
 
+# NOTE: appears to be unused in Bazel.
 cc_action_type(
     name = "objcopy_embed_data",
     action_name = "objcopy_embed_data",
@@ -167,10 +189,15 @@ cc_action_type(
     action_name = ACTION_NAMES.objcpp_compile,
 )
 
+# NOTE: I think this is a mistake in Bazel; this is only referenced in
+# `CppActionConfig.java` and does not exist in `CppActionNames.java` or anywhere
+# else.
+'''
 cc_action_type(
     name = "objcpp_executable",
     action_name = "objc++-executable",
 )
+'''
 
 cc_action_type(
     name = "clif_match",
@@ -179,7 +206,12 @@ cc_action_type(
 
 cc_action_type_set(
     name = "ar_actions",
-    actions = [":cpp_link_static_library"],
+    # See: https://github.com/bazelbuild/bazel/blob/41df375c87a140da9aedf75778cbc7c21ec9f39e/src/main/java/com/google/devtools/build/lib/rules/cpp/CcLinkingHelper.java#L896-L900
+    #  - entries with `LinkerOrArchiver.ARCHIVER`
+    actions = [
+        ":cpp_link_static_library",
+        ":objc_fully_link",
+    ],
 )
 
 cc_action_type_set(
@@ -338,6 +370,7 @@ cc_action_type_set(
         ":assemble",
         ":preprocess_assemble",
         ":llvm_cov",
+        ":dwp",
         ":lto_indexing",
         ":lto_backend",
         ":lto_index_for_executable",
@@ -354,7 +387,7 @@ cc_action_type_set(
         ":objc_executable",
         ":objc_fully_link",
         ":objcpp_compile",
-        ":objcpp_executable",
+        # ":objcpp_executable", # NOTE: see comment on definition
         ":clif_match",
     ],
 )

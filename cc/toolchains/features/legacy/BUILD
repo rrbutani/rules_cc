@@ -284,6 +284,16 @@ cc_external_feature(
     overridable = True,
 )
 
+cc_external_feature(
+    name = "compiler_output_flav /@,<[gs, constraints=<[]>",
+    feature_name = "compiler_output_flags",
+    overridable = True,
+)
+
+platform(
+    name = "ugh, constraints=<[]>",
+)
+
 cc_feature_set(
     name = "all_legacy_builtin_features",
     all_of = [

@@ -103,28 +103,3 @@ cc_nested_args_from_settings = rule(
 )
 
 #------------------------------------------
-
-
-"""
-
-llvm_cc_toolchain_top(
-    _built_in_features = ...,
-    _built_in_action_configs = ...,
-
-    features_to_filter_out: attr.label_list(),
-    action_configs_to_filter_out: attr.label_list(),
-
-    extra_features: attr.label_list(),
-    extra_action_configs: attr.label_list(),
-
-    _flag_for_features_to_filter_out: attr.label(default = flag),
-    _flag_for_action_configs_to_filter_out: attr.label(default = flag),
-    _flag_for_extra_features: attr.label(default = flag),
-    _flag_for_extra_action_configs: attr.label(default = flag),
-    consult_flags = True,
-
-
-
-)
-
-"""

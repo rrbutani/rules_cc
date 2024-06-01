@@ -1,0 +1,254 @@
+# NOTE: this is purposefully not as general as `unix_cc_configure.bzl`
+#
+# specific to LLVM and Linux (for now) to reduce scope
+
+load(":defs.bzl", "llvm_tools")
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
+bool_flag(
+    name = "use_dir_deps",
+    build_setting_default = False,
+)
+config_setting(name = "precise", flag_values = {":use_dir_deps": "False"})
+config_setting(name = "fuzzy", flag_values = {":use_dir_deps": "True"})
+
+################################################################################
+
+llvm_tools(
+    name = "tools",
+    version = "18.1.5",
+    clang = "@llvm_bins_x86_64_linux//:clang",
+    clang_built_in_headers = select({
+        ":precise": "@llvm_bins_x86_64_linux//:clang-builtin-headers",
+        ":fuzzy":   "@llvm_bins_x86_64_linux//:clang-builtin-headers-dir",
+    }),
+    lld      = "@llvm_bins_x86_64_linux//:lld",
+    ar       = "@llvm_bins_x86_64_linux//:ar",
+    cov      = "@llvm_bins_x86_64_linux//:cov",
+    dwp      = "@llvm_bins_x86_64_linux//:dwp",
+    nm       = "@llvm_bins_x86_64_linux//:nm",
+    objdump  = "@llvm_bins_x86_64_linux//:objdump",
+    objcopy  = "@llvm_bins_x86_64_linux//:objcopy",
+    profdata = "@llvm_bins_x86_64_linux//:profdata",
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+# TODO: probably push down this target into the fetched repo?
+
+
+
+################################################################################
+
+# TODO: add a feature for `-fuse-ld=lld`, default enabled
+#  - note that it gets its path from resource dir?
+
+# TODO: add a feature for setting the install-dir relative sysroot
+#  - TODO: make sure that gcc toolchain searching is inhibited?
+#    + otherwise add `/dev/null`
+
+string_flag(
+    name = "llvm_version",
+    build_setting_default = "any",
+    values = [
+        "any",
+        "18.1.5",
+        "18.1",
+        "18",
+        # ...
+    ],
+)
+# TODO: generate `config_setting`s?
+# i.e. `llvm_version_18.1.5`
+#      `llvm_version_18.1`
+#      `llvm_version_18`
+#
+# when specified on targets they mandate:
+#      `llvm_version_18.1.5`: 18.1.5
+#      `llvm_version_18.1`:   18.1.x
+#      `llvm_version_18`:     18.x.x
+
+# x = selects.with_or(
+#     {
+#         (":llvm_version_any", ":llvm_version_18.1.5", ...):
+#     },
+#     no_match_error = "LLVM version not matched",
+# )
+# TODO: selects.config_setting_group to craft `config_setting`s for toolchains
+#  - note: to do this we'd have to pass the llvm version into a macro... :-(
+#    + this is because we can't generate targets to pass the `toolchain` that's
+#      generated at a rule level; needs to be a macro
+#
+# I guess we can have an (optional but recommended) macro layer on top...
+#  - if you're invoking `toolchain` yourself, you're on your own; it's up to you
+#    to replicate this logic if you want this feature
+#    + we can expose the helper function that makes the target settings still
+
+string_flag(
+    name = "cxx_stdlib_kind",
+    build_setting_default = "any",
+    values = [
+        "none",
+        "any",
+        "libc++",
+        # ...
+    ],
+)
+
+# TODO: compiler-rt?
+# TODO: libc kind?
+# TODO: glibc version (incl none)
+# TODO: macOS SDK version (incl none)
+
+################################################################################
+
+# for fetched LLVM sources we should, for simplicity:
+#   - create one repo per version with a `select` inside on target platform
+#     + TODO: give example of exposing `lld` (or, like, `clang-fmt` or something
+#       if we do multi-call) using `extract_...` rule
+# can do the same for libc++/compiler-rt/unwind/glibc/etc.?
+#   - would need to take care to emit the appropriate `target_compatible_with`
+#     constraints!
+
+# going to make the glibc sysroot a special case
+#   - it's annoying to overlay the linux-api-headers and glibc tarballs with
+#     regular rules; would rather do it in a repo rule
+#   - so: users will need to specify both versions at fetch time...
+#     + not great composability but alas..
+#     + this tarballs are pretty small and it's unlikely we'd get much reuse
+#       (i.e. I think it's very unlikely the same build would have two
+#       toolchains differing in only linux-api-headers version) so I feel okay
+#       about it
+#   - we should allow specifying this on the top-level bzlmod tag somehow and
+#     we should have a "default" corresponding version of linux-api-headers for
+#     each glibc version (probably just take the min, be sure to leave links to
+#     the arch PKGBUILD?)
+#     + honestly... maybe we don't need to provide a way to override the
+#       `linux-api-headers` version in the bzlmod interface; users that want
+#       this can drop down to using `extra_glibc` + giving a label I think
+
+# module ext tag: extra_fetched_source? to expose for people who want direct
+# access for whatever reason?
+#  - probably one tag ext per guy? not sure
+#    + i.e. `llvm.extra_llvm_tools_repo(name = ..., version = ...)`
+#    + i.e. `llvm.extra_libcxx_repo(name = ..., version = ...)`
+#    + i.e. `llvm.extra_glibc(name = ..., version = ..., linux_api_version = ...)`
+#  - error on name conflicts, dups
+#  - say that the motivation is more control; useful if you want to drop down
+#    a level from the macro layer and configure toolchains yourself (i.e. maybe
+#    you want to use a custom LLVM (host OS's) but the hermetic glibc, etc.)
+
+'''
+# bzlmod interface
+llvm.toolchain(
+    name,
+    llvm_tools = `Label` | `LLVM Version` | `llvm(Version)`,
+
+    # TODO: not sure whether to offer this...
+    # Idea is that it'd be mutually exclusive with the target attrs above; a way
+    # to specify your `target_libs(...)` target yourself.
+    #
+    # I think it's probably not worth offering. A little extra boilerplate seems
+    # okay.
+    #
+    # Alternative is to *only* provide this and to make users that want custom
+    # combinations declare a target themselves + use `extra_*_repo` tags. I
+    # think that's clearly a worse option.
+    #
+    # on the other hand... maybe keeps us from having to do as much validation?
+    # i.e. c_stdlib for macOS *must* be `macOS-SDK-<ver>`
+    #
+    # an alternative API could have tag classes declare the target_libs target
+    # which then can be referenced here, i.e.:
+    # ```
+    # llvm.tools(name = ..., version = ...)
+    # llvm.target_libs(
+    #   name = ...,
+    #   triple = ...,
+    #   cxx_stdlib = ..., # or even a tag class per lib..
+    #   ...
+    # )
+    # llvm.toolchain(
+    #   name = ..,
+    #   tools = ...,
+    #   libs = ...,
+    # )
+    # ```
+    #
+    # but: this doesn't really reduce our validation burden
+    #
+    # not going to bother with this for now
+    # target_libs = `Label`,
+
+    target = `well known platform name`, # i.e. `x86_64-linux`, `x86_64-darwin`, `aarch64-linux`, `aarch64-darwin`
+    # each entry in this list needs to have:
+    #  - validation/defaults producing function
+    #  - list of constraints, platform label
+    #  - target triple name
+    #
+    #  - can maybe consider splitting this up into separate os/arch parts?
+    #  - can also maybe consider getting rid of this and just accepting target
+    #    triples? (and grabbing that triple parser/correlator from #185...)
+    #    + gonna call this future work; TODO
+    #    + for now having a well-known list seems sustainable and okay
+
+    triple = `string` | None, # (inferred from `target` if not given)
+    #  - TODO: can have this be Inferred from the provided/inferred target + components? (idea would be to do things like tack on `-musl` for example when using musl...)
+    #  - intent is to allow easy overriding
+    #  - should also probably put this in a feature..
+
+    compiler_runtime_lib = `Label` or `compiler-rt(<ver>)`, # defaults to `compiler-rt(llvm version)`? depends on target
+
+    unwind_lib = `Label` or `llvm_libunwind(<ver>)` or None, # defaults to `llvm_libunwind(llvm version)`? depends on target
+
+    c_stdlib_sysroot = `Label` or `glibc(<ver>)` or `macOsSdk(<ver>)` or None, # defaults to `glibc(2.22)` or `macosSdk(???)`? depends on target
+
+    cxx_stdlib = `Label` or `libc++(<ver>)` or None, # defaults to `libc++(llvm version)`? depends on target
+
+    exec_platforms = ["x86_64-linux", "x86_64-darwin", "aarch64-linux", "aarch64-darwin"], # TODO: eventually extend to just a list of `(name, constraint list)`; because finding the appropriate host tool is handled out-of-band this isn't an issue
+    extra_features = [...], # labels
+    extra_action_configs = [...], # labels
+    extra_args = [...], # labels
+    disabled_features = [...], # labels or names?
+    disabled_action_configs = [...], # labels or names?
+)
+
+# outer macro interface
+def llvm_toolchain(
+    name,
+    llvm_tools,
+    target_libs,
+
+    exec_platform,
+    exec_platform_constraints,
+    target_platform,
+    target_platform_constraints,
+
+
+
+    # for constraint gen:
+    # TODO: have a rule somewhere check these against `llvm_tools` and
+    # `target_libs`; perhaps warn on missing versions
+    known_versions = dict(
+        (llvm, libc++, compiler-rt, llvm_libunwind, glibc, linux-api-headers, macOS-sdk): ver-string,
+    ),
+
+
+): ... does everything, including the `toolchain(...)` target
+
+
+def llvm_toolchain_config(
+    name,
+    llvm_tools,
+    target_libs,
+    ...
+):
+# not sure if this interface is worth providing... maybe for the sake of not
+# having to repeat the versions? idk
+
+'''
+
+# TODO: -gz=zstd for split debug? or just always?

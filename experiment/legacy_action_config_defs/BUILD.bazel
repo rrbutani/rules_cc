@@ -20,13 +20,19 @@ package(default_visibility = ["//visibility:public"])
 
 ## Knobs:
 # https://github.com/bazelbuild/bazel/blob/eb50e5b83bc0f54e7409f553b67a33b8793b7508/src/main/java/com/google/devtools/build/lib/rules/cpp/CppActionConfigs.java#L1029-L1031
+#
+# NOTE: you can override just the tool path or the entire `cc_tool`.
 label_flag(name = "gcc_tool_path", build_setting_default = ":DUMMY_GCC_TOOL")
 label_flag(name = "ar_tool_path", build_setting_default = ":DUMMY_AR_TOOL")
 label_flag(name = "strip_tool_path", build_setting_default = ":DUMMY_STRIP_TOOL")
 
-cc_tool(name = "gcc_tool", src = ":gcc_tool_path")
-cc_tool(name = "ar_tool", src = ":ar_tool_path")
-cc_tool(name = "strip_tool_default", src = ":strip_tool_path")
+cc_tool(name = "gcc_default_tool", src = ":gcc_tool_path")
+cc_tool(name = "ar_default_tool", src = ":ar_tool_path")
+cc_tool(name = "strip_default_tool", src = ":strip_tool_path")
+
+label_flag(name = "gcc_tool", src = ":gcc_default_tool")
+label_flag(name = "ar_tool", src = ":ar_default_tool")
+label_flag(name = "strip_tool_default", src = ":strip_default_tool")
 
 #-------------------------------------------------------------------------------
 

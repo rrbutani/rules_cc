@@ -1,4 +1,6 @@
 
+struct_ctor = struct
+
 def _print_cc_toolchain_config_info(ctx):
     info = ctx.attr.config[CcToolchainConfigInfo].proto
 
